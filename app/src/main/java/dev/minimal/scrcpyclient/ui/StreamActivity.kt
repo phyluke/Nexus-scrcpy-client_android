@@ -47,8 +47,10 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var status: TextView
     private lateinit var screenPill: TextView
+    private lateinit var exitPill: TextView
     private lateinit var bubbleView: TextView
     private lateinit var pillStrip: LinearLayout
+    private lateinit var floatingDock: LinearLayout
     private var settings = StreamSettings()
     private var worker: Thread? = null
     private var audioThread: Thread? = null
@@ -107,15 +109,10 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             targetScreenOn = !targetScreenOn
             updateScreenPill()
             controller?.send(ControlMessages.displayPower(targetScreenOn))
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = (8 * dp).toInt() }
         }
         updateScreenPill()
 
-        val exitPill = pill("✕ Exit") { exitSession() }
+        exitPill = pill("✕ Exit") { exitSession() }
 
         pillStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -139,17 +136,11 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             elevation = 8 * dp
         }
 
-        val floatingDock = LinearLayout(this).apply {
+        floatingDock = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(pillStrip)
-            addView(
-                bubbleView,
-                LinearLayout.LayoutParams(bubbleSize, bubbleSize).apply {
-                    marginStart = (8 * dp).toInt()
-                }
-            )
         }
+        applyPillDirection(expandRight = false, dp = dp)
 
         val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
         var downRawX = 0f
@@ -186,8 +177,17 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragging) {
+                        val bubbleCenterX = floatingDock.left + floatingDock.translationX +
+                            bubbleView.left + bubbleView.width / 2f
+                        val shouldExpandRight = bubbleCenterX < container.width / 2f
                         pillsExpanded = !pillsExpanded
-                        pillStrip.visibility = if (pillsExpanded) View.VISIBLE else View.GONE
+                        if (pillsExpanded) {
+                            applyPillDirection(expandRight = shouldExpandRight, dp = dp)
+                            pillStrip.visibility = View.VISIBLE
+                            floatingDock.post { clampDockWithinBounds(dp) }
+                        } else {
+                            pillStrip.visibility = View.GONE
+                        }
                     }
                     true
                 }
@@ -220,6 +220,44 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         setContentView(container)
         surfaceView.holder.addCallback(this)
+    }
+
+    private fun applyPillDirection(expandRight: Boolean, dp: Float) {
+        val gap = (8 * dp).toInt()
+        screenPill.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { marginEnd = gap }
+        exitPill.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+
+        val bubbleSize = (44 * dp).toInt()
+        val bubbleLp = LinearLayout.LayoutParams(
+            bubbleView.width.takeIf { it > 0 } ?: bubbleSize,
+            bubbleView.height.takeIf { it > 0 } ?: bubbleSize
+        )
+
+        floatingDock.removeAllViews()
+        if (expandRight) {
+            bubbleLp.marginEnd = gap
+            floatingDock.addView(bubbleView, bubbleLp)
+            floatingDock.addView(pillStrip)
+        } else {
+            bubbleLp.marginStart = gap
+            floatingDock.addView(pillStrip)
+            floatingDock.addView(bubbleView, bubbleLp)
+        }
+    }
+
+    private fun clampDockWithinBounds(dp: Float) {
+        val maxLeft = -((container.width - floatingDock.width - (12 * dp)).coerceAtLeast(0f))
+        val maxRight = (12 * dp)
+        val minTop = -((36 * dp) - (12 * dp))
+        val maxBottom = (container.height - floatingDock.height - (48 * dp)).coerceAtLeast(0f)
+        floatingDock.translationX = floatingDock.translationX.coerceIn(maxLeft, maxRight)
+        floatingDock.translationY = floatingDock.translationY.coerceIn(minTop, maxBottom)
     }
 
     private fun pillBg(isGreen: Boolean): GradientDrawable {
@@ -301,14 +339,21 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun startAudioPlayback(scrcpySession: ScrcpySession) {
-        val stream = scrcpySession.audio ?: return
+        val stream = scrcpySession.audio
+        if (stream == null) {
+            setStatus("Audio stream unavailable")
+            return
+        }
         audioThread = Thread {
             var track: AudioTrack? = null
             try {
                 val inp = DataInputStream(BufferedInputStream(stream.openInputStream(), 1 shl 15))
-                inp.readByte()
+                // Dummy byte is sent only on the first forward socket (video), not on audio
                 val codecId = inp.readInt()
-                if (codecId != 0x72617720) return@Thread // Only raw PCM ("raw ") is played directly here
+                if (codecId != 0x72617720) {
+                    setStatus("Audio codec 0x${Integer.toHexString(codecId)} not raw PCM")
+                    return@Thread
+                }
 
                 val sampleRate = 48_000
                 val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
@@ -347,7 +392,8 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         track.write(pcm, 0, pcm.size)
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (running) setStatus("Audio stopped: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
                 runCatching { track?.stop() }
                 runCatching { track?.release() }
@@ -515,6 +561,3 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
-
-
-
