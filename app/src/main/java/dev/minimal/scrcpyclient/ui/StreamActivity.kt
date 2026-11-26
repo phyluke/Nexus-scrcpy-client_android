@@ -17,6 +17,7 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -47,6 +48,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     @Volatile private var running = false
     @Volatile private var session: ScrcpySession? = null
     @Volatile private var controller: Controller? = null
+    @Volatile private var targetScreenOn = false
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
 
@@ -55,7 +57,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
 
-        // Keep viewer phone awake at both Window and SurfaceView levels
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -63,7 +64,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             hide(WindowInsetsCompat.Type.systemBars())
         }
 
-        // System Back gesture / button cleanly exits the stream
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 exitSession()
@@ -83,29 +83,41 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             setPadding(32, 64, 32, 24)
         }
 
-        // Subtle floating Exit pill in top-right corner so you can always exit with one tap
-        val exitBtn = TextView(this).apply {
-            text = "✕ Exit"
-            textSize = 13f
+        val dp = resources.displayMetrics.density
+        fun pill(label: String, onClick: () -> Unit) = TextView(this).apply {
+            text = label
+            textSize = 12f
             setTextColor(Color.WHITE)
-            val dp = resources.displayMetrics.density
-            setPadding((14 * dp).toInt(), (8 * dp).toInt(), (14 * dp).toInt(), (8 * dp).toInt())
+            setPadding((12 * dp).toInt(), (7 * dp).toInt(), (12 * dp).toInt(), (7 * dp).toInt())
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#99000000"))
                 cornerRadius = 20 * dp
                 setStroke((1 * dp).toInt(), Color.parseColor("#55FFFFFF"))
             }
-            setOnClickListener { exitSession() }
+            setOnClickListener { onClick() }
         }
 
-        val exitLp = FrameLayout.LayoutParams(
+        val topControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(pill("Screen") {
+                targetScreenOn = !targetScreenOn
+                controller?.send(ControlMessages.displayPower(targetScreenOn))
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = (8 * dp).toInt() }
+            })
+            addView(pill("✕ Exit") { exitSession() })
+        }
+
+        val topControlsLp = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END
         ).apply {
-            val dp = resources.displayMetrics.density
             topMargin = (36 * dp).toInt()
-            marginEnd = (14 * dp).toInt()
+            marginEnd = (12 * dp).toInt()
         }
 
         container = FrameLayout(this).apply {
@@ -126,14 +138,13 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     Gravity.TOP
                 )
             )
-            addView(exitBtn, exitLp)
+            addView(topControls, topControlsLp)
         }
 
         setContentView(container)
         surfaceView.holder.addCallback(this)
     }
 
-    /** Double-pressing Volume Down also exits the session cleanly. */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             val now = System.currentTimeMillis()
@@ -213,33 +224,34 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val ctl = Controller(s.control.openOutputStream())
                 controller = ctl
 
-                // Wake Redmi compositor so SurfaceFlinger emits frames immediately without physical Power press
+                // Official scrcpy wake sequence: turn power mode ON and send BACK_OR_SCREEN_ON
                 ctl.send(ControlMessages.displayPower(true))
-                ctl.send(ControlMessages.key(ControlMessages.ACTION_DOWN, ControlMessages.KEYCODE_WAKEUP))
-                ctl.send(ControlMessages.key(ControlMessages.ACTION_UP, ControlMessages.KEYCODE_WAKEUP))
+                ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_DOWN))
+                ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_UP))
+                targetScreenOn = true
 
                 val inp = DataInputStream(BufferedInputStream(s.video.openInputStream(), 1 shl 16))
-                inp.readByte() // dummy byte (forward tunnel)
-                inp.readFully(ByteArray(64)) // device name
+                inp.readByte()
+                inp.readFully(ByteArray(64))
                 val codec = inp.readInt()
                 if (codec != 0x68323634) {
                     throw IOException("Unsupported codec 0x${Integer.toHexString(codec)} (need h264)")
                 }
 
                 val hdr = ByteArray(12)
-                var firstFrame = true
+                var frameCount = 0
                 while (running) {
                     inp.readFully(hdr)
-                    val bb = ByteBuffer.wrap(hdr) // big-endian
-                    if ((hdr[0].toInt() and 0x80) != 0) { // session packet: new video size
+                    val bb = ByteBuffer.wrap(hdr)
+                    if ((hdr[0].toInt() and 0x80) != 0) {
                         val w = bb.getInt(4)
                         val h = bb.getInt(8)
                         decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
-                        decoder = createDecoder(surface, w, h)
                         videoW = w
                         videoH = h
                         runOnUiThread { fit(w, h) }
-                    } else { // media packet
+                        decoder = createDecoder(surface, w, h)
+                    } else {
                         val first = bb.getLong(0)
                         val isConfig = ((first ushr 62) and 1L) == 1L
                         val isKey = ((first ushr 61) and 1L) == 1L
@@ -248,11 +260,14 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         val data = ByteArray(size)
                         inp.readFully(data)
                         decoder?.let { feed(it, data, pts, isConfig, isKey) }
-                        if (firstFrame && !isConfig) {
-                            firstFrame = false
-                            setStatus("")
-                            // Turn off Redmi physical display once the first video frame has rendered
-                            ctl.send(ControlMessages.displayPower(false))
+                        if (!isConfig) {
+                            frameCount++
+                            if (frameCount == 1) setStatus("")
+                            // Wait 15 frames (~0.5s) after wake so live UI renders before turning physical screen off
+                            if (frameCount == 15) {
+                                targetScreenOn = false
+                                ctl.send(ControlMessages.displayPower(false))
+                            }
                         }
                     }
                 }
@@ -278,7 +293,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val s = session
         worker = null
         Thread {
-            // Keep Redmi display off when disconnecting so it stays dark as a headless NAS
             ctl?.send(ControlMessages.displayPower(false))
             try {
                 Thread.sleep(200)
@@ -328,7 +342,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
     }
 
-    /** Fit the entire video frame cleanly centered on screen without cropping top or bottom. */
     private fun fit(w: Int, h: Int) {
         val cw = container.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
         val ch = container.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
