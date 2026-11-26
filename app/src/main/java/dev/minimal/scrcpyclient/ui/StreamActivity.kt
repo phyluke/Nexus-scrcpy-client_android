@@ -352,7 +352,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val inp = DataInputStream(BufferedInputStream(stream.openInputStream(), 1 shl 15))
                 val codecId = inp.readInt()
                 android.util.Log.i("ScrcpyAudio", "Read audio codecId=0x${Integer.toHexString(codecId)}")
-                if (codecId != 0x72617720) {
+                if (codecId != 0x72617720 && codecId != 0x726177) {
                     val msg = "Audio codec 0x${Integer.toHexString(codecId)} not raw PCM"
                     android.util.Log.w("ScrcpyAudio", msg)
                     setStatus(msg)
