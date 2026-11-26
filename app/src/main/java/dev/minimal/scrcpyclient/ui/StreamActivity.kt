@@ -300,8 +300,8 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         status.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     }
 
-    private fun startAudioPlayback(audioStream: Any?) {
-        val stream = audioStream ?: return
+    private fun startAudioPlayback(scrcpySession: ScrcpySession) {
+        val stream = scrcpySession.audio ?: return
         audioThread = Thread {
             var track: AudioTrack? = null
             try {
@@ -376,7 +376,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     s.close()
                     return@Thread
                 }
-                startAudioPlayback(s.audio)
+                startAudioPlayback(s)
 
                 val ctl = Controller(s.control.openOutputStream())
                 controller = ctl
@@ -515,5 +515,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
+
 
 
