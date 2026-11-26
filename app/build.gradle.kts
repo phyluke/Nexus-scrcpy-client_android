@@ -37,8 +37,6 @@ dependencies {
     implementation("io.github.muntashirakon:libadb-android:3.1.1")
     // Conscrypt provides TLS 1.3 needed by libadb-android for Android 11+ TLS ADB
     implementation("org.conscrypt:conscrypt-android:2.5.3")
-    // X509 certificate generation used by libadb-android (see its README)
-    implementation("com.github.MuntashirAkon:sun-security-android:1.1")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
