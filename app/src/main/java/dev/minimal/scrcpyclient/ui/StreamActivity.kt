@@ -11,6 +11,7 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
+import io.github.muntashirakon.adb.AdbStream
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -515,3 +516,4 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
+
