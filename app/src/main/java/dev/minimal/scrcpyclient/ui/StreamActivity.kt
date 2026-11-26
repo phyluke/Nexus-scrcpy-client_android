@@ -15,6 +15,7 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -34,6 +35,7 @@ import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
+import kotlin.math.hypot
 
 /** Fullscreen touch-controlled stream: ADB -> scrcpy video socket -> MediaCodec -> SurfaceView. */
 class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
@@ -42,9 +44,12 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private lateinit var status: TextView
     private lateinit var screenPill: TextView
+    private lateinit var bubbleView: TextView
+    private lateinit var pillStrip: LinearLayout
     private var settings = StreamSettings()
     private var worker: Thread? = null
     private var lastVolDownTime = 0L
+    private var pillsExpanded = false
 
     @Volatile private var running = false
     @Volatile private var session: ScrcpySession? = null
@@ -106,13 +111,87 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
         updateScreenPill()
 
-        val topControls = LinearLayout(this).apply {
+        val exitPill = pill("✕ Exit") { exitSession() }
+
+        pillStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
             addView(screenPill)
-            addView(pill("✕ Exit") { exitSession() })
+            addView(exitPill)
         }
 
-        val topControlsLp = FrameLayout.LayoutParams(
+        val bubbleSize = (44 * dp).toInt()
+        bubbleView = TextView(this).apply {
+            text = "•••"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#CC111827"))
+                setStroke((1.5f * dp).toInt(), Color.parseColor("#8866BB6A"))
+            }
+            elevation = 8 * dp
+        }
+
+        val floatingDock = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(pillStrip)
+            addView(
+                bubbleView,
+                LinearLayout.LayoutParams(bubbleSize, bubbleSize).apply {
+                    marginStart = (8 * dp).toInt()
+                }
+            )
+        }
+
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        var downRawX = 0f
+        var downRawY = 0f
+        var startTx = 0f
+        var startTy = 0f
+        var dragging = false
+
+        bubbleView.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startTx = floatingDock.translationX
+                    startTy = floatingDock.translationY
+                    dragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!dragging && hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
+                        dragging = true
+                    }
+                    if (dragging) {
+                        val maxLeft = -((container.width - floatingDock.width - (12 * dp)).coerceAtLeast(0f))
+                        val maxRight = (12 * dp)
+                        val minTop = -((36 * dp) - (12 * dp))
+                        val maxBottom = (container.height - floatingDock.height - (48 * dp)).coerceAtLeast(0f)
+                        floatingDock.translationX = (startTx + dx).coerceIn(maxLeft, maxRight)
+                        floatingDock.translationY = (startTy + dy).coerceIn(minTop, maxBottom)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!dragging) {
+                        pillsExpanded = !pillsExpanded
+                        pillStrip.visibility = if (pillsExpanded) View.VISIBLE else View.GONE
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        val dockLp = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END
@@ -132,7 +211,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     Gravity.TOP
                 )
             )
-            addView(topControls, topControlsLp)
+            addView(floatingDock, dockLp)
         }
 
         setContentView(container)
@@ -371,4 +450,3 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
-
