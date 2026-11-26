@@ -13,6 +13,7 @@ data class StreamSettings(
     val bitRate: Int = 2_000_000,
     val maxFps: Int = 30,
     val navBar: Boolean = true,
+    val screenOff: Boolean = true,
 )
 
 object Units {
@@ -60,10 +61,12 @@ class AppStore(context: Context) {
         bitRate = prefs.getInt("bitRate", 2_000_000),
         maxFps = prefs.getInt("maxFps", 30),
         navBar = prefs.getBoolean("navBar", true),
+        screenOff = prefs.getBoolean("screenOff", true),
     )
 
     fun saveSettings(s: StreamSettings) {
         prefs.edit().putInt("maxSize", s.maxSize).putInt("bitRate", s.bitRate)
-            .putInt("maxFps", s.maxFps).putBoolean("navBar", s.navBar).apply()
+            .putInt("maxFps", s.maxFps).putBoolean("navBar", s.navBar)
+            .putBoolean("screenOff", s.screenOff).apply()
     }
 }

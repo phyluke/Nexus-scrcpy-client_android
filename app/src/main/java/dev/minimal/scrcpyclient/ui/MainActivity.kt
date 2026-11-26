@@ -122,9 +122,10 @@ class MainActivity : AppCompatActivity() {
         val bitrate = field("Bitrate (2M, 4M, 8M)", Units.formatBitRate(s.bitRate))
         val fps = field("Max FPS", s.maxFps.toString(), numeric = true)
         val nav = CheckBox(this).apply { text = "Show navigation bar overlay"; isChecked = s.navBar }
+        val off = CheckBox(this).apply { text = "Turn target screen off while streaming"; isChecked = s.screenOff }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0)
-            addView(maxSize); addView(bitrate); addView(fps); addView(nav)
+            addView(maxSize); addView(bitrate); addView(fps); addView(nav); addView(off)
         }
         AlertDialog.Builder(this).setTitle("Stream settings").setView(box)
             .setPositiveButton("Save") { _, _ ->
@@ -134,6 +135,7 @@ class MainActivity : AppCompatActivity() {
                         bitRate = Units.parseBitRate(bitrate.text.toString()) ?: s.bitRate,
                         maxFps = fps.text.toString().toIntOrNull() ?: s.maxFps,
                         navBar = nav.isChecked,
+                        screenOff = off.isChecked,
                     )
                 )
             }
