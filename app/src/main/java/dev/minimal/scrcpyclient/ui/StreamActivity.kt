@@ -48,8 +48,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     @Volatile private var running = false
     @Volatile private var session: ScrcpySession? = null
     @Volatile private var controller: Controller? = null
-    @Volatile private var activeDecoder: MediaCodec? = null
-    @Volatile private var currentSurface: Surface? = null
     @Volatile private var targetScreenOn = true
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
@@ -122,16 +120,10 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             marginEnd = (12 * dp).toInt()
         }
 
+        // Initial 1x1 SurfaceView prevents Surface destruction when fit() scales to video dimensions
         container = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            addView(
-                surfaceView,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    Gravity.CENTER
-                )
-            )
+            addView(surfaceView, FrameLayout.LayoutParams(1, 1, Gravity.CENTER))
             addView(
                 status,
                 FrameLayout.LayoutParams(
@@ -173,7 +165,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         fun px(i: Int) = ((e.getX(i) / v.width) * w).toInt().coerceIn(0, w - 1)
         fun py(i: Int) = ((e.getY(i) / v.height) * h).toInt().coerceIn(0, h - 1)
         fun send(action: Int, i: Int, droppable: Boolean = false) =
-            c.send(ControlMessages.touch(action, i, px(i), py(i), w, h), droppable)
+            c.send(ControlMessages.touch(action, e.getPointerId(i).toLong(), px(i), py(i), w, h), droppable)
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
@@ -192,24 +184,9 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         container.post { if (videoW > 0 && videoH > 0) fit(videoW, videoH) }
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        currentSurface = holder.surface
-        if (!running) {
-            startWorker(holder.surface)
-        } else {
-            runCatching { activeDecoder?.setOutputSurface(holder.surface) }
-        }
-    }
-
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        currentSurface = holder.surface
-        runCatching { activeDecoder?.setOutputSurface(holder.surface) }
-    }
-
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        currentSurface = null
-    }
-
+    override fun surfaceCreated(holder: SurfaceHolder) = startWorker(holder.surface)
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    override fun surfaceDestroyed(holder: SurfaceHolder) = stopWorker()
     override fun onDestroy() {
         stopWorker()
         super.onDestroy()
@@ -220,7 +197,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         status.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     }
 
-    private fun startWorker(initialSurface: Surface) {
+    private fun startWorker(surface: Surface) {
         val store = AppStore(this)
         val profile = store.profiles().firstOrNull { it.id == intent.getStringExtra("profileId") }
         if (profile == null) {
@@ -258,13 +235,10 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         val w = bb.getInt(4)
                         val h = bb.getInt(8)
                         decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
-                        activeDecoder = null
+                        decoder = createDecoder(surface, w, h)
                         videoW = w
                         videoH = h
                         runOnUiThread { fit(w, h) }
-                        val surf = currentSurface ?: initialSurface
-                        decoder = createDecoder(surf, w, h)
-                        activeDecoder = decoder
                     } else {
                         val first = bb.getLong(0)
                         val isConfig = ((first ushr 62) and 1L) == 1L
@@ -278,7 +252,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             firstFrame = false
                             setStatus("")
                             targetScreenOn = true
-                            ctl.send(ControlMessages.displayPower(true))
                             ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_DOWN))
                             ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_UP))
                         }
@@ -287,7 +260,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             } catch (e: Exception) {
                 if (running) setStatus("Stopped: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
-                activeDecoder = null
                 decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
                 controller?.close()
                 controller = null
