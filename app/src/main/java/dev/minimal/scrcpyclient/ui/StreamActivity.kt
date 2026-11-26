@@ -251,9 +251,14 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         if (firstFrame && !isConfig) {
                             firstFrame = false
                             setStatus("")
-                            targetScreenOn = true
                             ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_DOWN))
                             ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_UP))
+                            if (settings.screenOff) {
+                                targetScreenOn = false
+                                ctl.send(ControlMessages.displayPower(false))
+                            } else {
+                                targetScreenOn = true
+                            }
                         }
                     }
                 }
@@ -277,8 +282,13 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         running = false
         val ctl = controller
         val s = session
+        val restoreScreen = !targetScreenOn
         worker = null
         Thread {
+            if (restoreScreen) {
+                ctl?.send(ControlMessages.displayPower(true))
+                runCatching { Thread.sleep(80) }
+            }
             ctl?.close()
             s?.close()
         }.start()
@@ -339,4 +349,5 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
+
 
