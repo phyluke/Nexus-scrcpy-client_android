@@ -110,7 +110,14 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         container = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            addView(surfaceView, FrameLayout.LayoutParams(1, 1, Gravity.CENTER))
+            addView(
+                surfaceView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    Gravity.CENTER
+                )
+            )
             addView(
                 status,
                 FrameLayout.LayoutParams(
@@ -153,7 +160,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         fun px(i: Int) = ((e.getX(i) / v.width) * w).toInt().coerceIn(0, w - 1)
         fun py(i: Int) = ((e.getY(i) / v.height) * h).toInt().coerceIn(0, h - 1)
         fun send(action: Int, i: Int, droppable: Boolean = false) =
-            c.send(ControlMessages.touch(action, e.getPointerId(i).toLong(), px(i), py(i), w, h), droppable)
+            c.send(ControlMessages.touch(action, i, px(i), py(i), w, h), droppable)
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
@@ -205,8 +212,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
                 val ctl = Controller(s.control.openOutputStream())
                 controller = ctl
-                // Turn off Redmi physical screen automatically while streaming
-                ctl.send(ControlMessages.displayPower(false))
 
                 val inp = DataInputStream(BufferedInputStream(s.video.openInputStream(), 1 shl 16))
                 inp.readByte() // dummy byte (forward tunnel)
@@ -241,6 +246,8 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         if (firstFrame && !isConfig) {
                             firstFrame = false
                             setStatus("")
+                            // Turn off Redmi physical screen only after first video frame renders
+                            ctl.send(ControlMessages.displayPower(false))
                         }
                     }
                 }

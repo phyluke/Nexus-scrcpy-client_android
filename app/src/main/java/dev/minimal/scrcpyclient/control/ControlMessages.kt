@@ -8,29 +8,29 @@ object ControlMessages {
     const val ACTION_UP = 1
     const val ACTION_MOVE = 2
 
-    private const val BUTTON_PRIMARY = 1
+    // scrcpy special pointer IDs: -1L = mouse, -2L = generic finger touch
+    private const val POINTER_ID_GENERIC_FINGER = -2L
 
     private const val TYPE_TOUCH = 2
     private const val TYPE_SET_DISPLAY_POWER = 10
 
     /** 32 bytes: type(1), action(1), pointerId(8), x(4), y(4), screenW(2), screenH(2), pressure(2), actionButton(4), buttons(4). */
-    fun touch(action: Int, pointerId: Long, x: Int, y: Int, screenW: Int, screenH: Int): ByteArray {
+    fun touch(action: Int, pointerIndex: Int, x: Int, y: Int, screenW: Int, screenH: Int): ByteArray {
         val isUp = action == ACTION_UP
         val pressure: Short = if (isUp) 0 else 0xFFFF.toShort()
-        val actionButton = if (action == ACTION_DOWN || isUp) BUTTON_PRIMARY else 0
-        val buttons = if (isUp) 0 else BUTTON_PRIMARY
+        val ptrId = if (pointerIndex == 0) POINTER_ID_GENERIC_FINGER else pointerIndex.toLong()
 
         return ByteBuffer.allocate(32)
             .put(TYPE_TOUCH.toByte())
             .put(action.toByte())
-            .putLong(pointerId)
+            .putLong(ptrId)
             .putInt(x)
             .putInt(y)
             .putShort(screenW.toShort())
             .putShort(screenH.toShort())
             .putShort(pressure)
-            .putInt(actionButton)
-            .putInt(buttons)
+            .putInt(0) // actionButton (0 for finger touch)
+            .putInt(0) // buttons (0 for finger touch)
             .array()
     }
 
