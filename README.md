@@ -2,6 +2,9 @@
 
 Minimal, zero-telemetry Android-to-Android scrcpy client over Wireless ADB. Built from scratch in Kotlin with low-latency raw PCM audio streaming and a lightweight floating control bubble.
 
+#Dowload Nexus-scrcpy-client_android app
+https://github.com/phyluke/Nexus-scrcpy-client_android/releases/tag/v1.0.0
+
 ## Features
 
 - **Android-to-Android Streaming:** View and control a target Android device directly from another Android device over Wireless ADB (`adb connect <ip>:<port>`).
@@ -21,8 +24,8 @@ Minimal, zero-telemetry Android-to-Android scrcpy client over Wireless ADB. Buil
 
 ## Setup & Usage
 
-1. **Bundle `scrcpy-server`:** Place the compatible `scrcpy-server` binary inside `app/src/main/assets/`.
-2. **Build APK:** Push to `main` (or trigger the GitHub Actions workflow) and download `nexus_scrcpy_phyluke.apk` from the workflow artifacts or Releases page.
-3. **Enable Wireless ADB on Target Device:**
+1. **Enable Wireless ADB on Host Device:**
    ```bash
    adb tcpip 5555
+2.  Both Host and Client Device should be in same Network (Wi-Fi)
+3.  Accept ADB key fingerprint on Host device 
