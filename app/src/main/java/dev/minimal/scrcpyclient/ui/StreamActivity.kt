@@ -213,6 +213,11 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val ctl = Controller(s.control.openOutputStream())
                 controller = ctl
 
+                // Wake Redmi compositor so SurfaceFlinger emits frames immediately without physical Power press
+                ctl.send(ControlMessages.displayPower(true))
+                ctl.send(ControlMessages.key(ControlMessages.ACTION_DOWN, ControlMessages.KEYCODE_WAKEUP))
+                ctl.send(ControlMessages.key(ControlMessages.ACTION_UP, ControlMessages.KEYCODE_WAKEUP))
+
                 val inp = DataInputStream(BufferedInputStream(s.video.openInputStream(), 1 shl 16))
                 inp.readByte() // dummy byte (forward tunnel)
                 inp.readFully(ByteArray(64)) // device name
@@ -246,7 +251,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         if (firstFrame && !isConfig) {
                             firstFrame = false
                             setStatus("")
-                            // Turn off Redmi physical screen only after first video frame renders
+                            // Turn off Redmi physical display once the first video frame has rendered
                             ctl.send(ControlMessages.displayPower(false))
                         }
                     }
@@ -273,10 +278,10 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val s = session
         worker = null
         Thread {
-            // Restore Redmi display power before disconnecting
-            ctl?.send(ControlMessages.displayPower(true))
+            // Keep Redmi display off when disconnecting so it stays dark as a headless NAS
+            ctl?.send(ControlMessages.displayPower(false))
             try {
-                Thread.sleep(300)
+                Thread.sleep(200)
             } catch (_: InterruptedException) {
             }
             ctl?.close()
