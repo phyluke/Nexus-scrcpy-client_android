@@ -62,11 +62,16 @@ class MainActivity : AppCompatActivity() {
                     text = "${p.label}\n${p.host}:${p.port}"
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
-                addView(button("Connect") { connect(p) })
+                addView(button("Open") { openStream(p) })
+                addView(button("Test") { connect(p) })
                 addView(button("Edit") { editProfile(p) })
             }
             list.addView(row)
         }
+    }
+
+    private fun openStream(p: Profile) {
+        startActivity(Intent(this, StreamActivity::class.java).putExtra("profileId", p.id))
     }
 
     private fun connect(p: Profile) {
