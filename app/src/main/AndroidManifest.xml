@@ -1,32 +1,36 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The ONLY permission. Key import/export uses the Storage Access Framework. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:allowBackup="false"
+        android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Nexus"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.ScrcpyClient">
+        android:theme="@style/Theme.AppCompat.NoActionBar">
+
+        <activity
+            android:name=".ui.LaunchActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <activity
             android:name=".ui.MainActivity"
-            android:exported="true">
-            
-        </activity>
+            android:exported="true" />
 
-        <activity android:name=".ui.KeysActivity" android:exported="false" />
+        <activity
+            android:name=".ui.KeysActivity"
+            android:exported="false" />
 
         <activity
             android:name=".ui.StreamActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
+            android:exported="false" />
+
     </application>
 </manifest>
-
-
-
-
