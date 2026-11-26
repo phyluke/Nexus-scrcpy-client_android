@@ -48,7 +48,9 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     @Volatile private var running = false
     @Volatile private var session: ScrcpySession? = null
     @Volatile private var controller: Controller? = null
-    @Volatile private var targetScreenOn = false
+    @Volatile private var activeDecoder: MediaCodec? = null
+    @Volatile private var currentSurface: Surface? = null
+    @Volatile private var targetScreenOn = true
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
 
@@ -190,9 +192,24 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         container.post { if (videoW > 0 && videoH > 0) fit(videoW, videoH) }
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) = startWorker(holder.surface)
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-    override fun surfaceDestroyed(holder: SurfaceHolder) = stopWorker()
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        currentSurface = holder.surface
+        if (!running) {
+            startWorker(holder.surface)
+        } else {
+            runCatching { activeDecoder?.setOutputSurface(holder.surface) }
+        }
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        currentSurface = holder.surface
+        runCatching { activeDecoder?.setOutputSurface(holder.surface) }
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        currentSurface = null
+    }
+
     override fun onDestroy() {
         stopWorker()
         super.onDestroy()
@@ -203,7 +220,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         status.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     }
 
-    private fun startWorker(surface: Surface) {
+    private fun startWorker(initialSurface: Surface) {
         val store = AppStore(this)
         val profile = store.profiles().firstOrNull { it.id == intent.getStringExtra("profileId") }
         if (profile == null) {
@@ -224,12 +241,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val ctl = Controller(s.control.openOutputStream())
                 controller = ctl
 
-                // Official scrcpy wake sequence: turn power mode ON and send BACK_OR_SCREEN_ON
-                ctl.send(ControlMessages.displayPower(true))
-                ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_DOWN))
-                ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_UP))
-                targetScreenOn = true
-
                 val inp = DataInputStream(BufferedInputStream(s.video.openInputStream(), 1 shl 16))
                 inp.readByte()
                 inp.readFully(ByteArray(64))
@@ -239,7 +250,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
 
                 val hdr = ByteArray(12)
-                var frameCount = 0
+                var firstFrame = true
                 while (running) {
                     inp.readFully(hdr)
                     val bb = ByteBuffer.wrap(hdr)
@@ -247,10 +258,13 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         val w = bb.getInt(4)
                         val h = bb.getInt(8)
                         decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
+                        activeDecoder = null
                         videoW = w
                         videoH = h
                         runOnUiThread { fit(w, h) }
-                        decoder = createDecoder(surface, w, h)
+                        val surf = currentSurface ?: initialSurface
+                        decoder = createDecoder(surf, w, h)
+                        activeDecoder = decoder
                     } else {
                         val first = bb.getLong(0)
                         val isConfig = ((first ushr 62) and 1L) == 1L
@@ -260,20 +274,20 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         val data = ByteArray(size)
                         inp.readFully(data)
                         decoder?.let { feed(it, data, pts, isConfig, isKey) }
-                        if (!isConfig) {
-                            frameCount++
-                            if (frameCount == 1) setStatus("")
-                            // Wait 15 frames (~0.5s) after wake so live UI renders before turning physical screen off
-                            if (frameCount == 15) {
-                                targetScreenOn = false
-                                ctl.send(ControlMessages.displayPower(false))
-                            }
+                        if (firstFrame && !isConfig) {
+                            firstFrame = false
+                            setStatus("")
+                            targetScreenOn = true
+                            ctl.send(ControlMessages.displayPower(true))
+                            ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_DOWN))
+                            ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_UP))
                         }
                     }
                 }
             } catch (e: Exception) {
                 if (running) setStatus("Stopped: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
+                activeDecoder = null
                 decoder?.let { runCatching { it.stop() }; runCatching { it.release() } }
                 controller?.close()
                 controller = null
@@ -293,11 +307,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val s = session
         worker = null
         Thread {
-            ctl?.send(ControlMessages.displayPower(false))
-            try {
-                Thread.sleep(200)
-            } catch (_: InterruptedException) {
-            }
             ctl?.close()
             s?.close()
         }.start()
