@@ -2,7 +2,8 @@
 
 Minimal, zero-telemetry Android-to-Android scrcpy client over Wireless ADB. Built from scratch in Kotlin with low-latency raw PCM audio streaming and a lightweight floating control bubble.
 
-#Dowload Nexus-scrcpy-client_android app
+# Dowload Nexus-scrcpy-client_android app
+
 https://github.com/phyluke/Nexus-scrcpy-client_android/releases/tag/v1.0.0
 
 ## Features
