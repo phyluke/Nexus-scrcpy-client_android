@@ -30,7 +30,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: AppStore
     private lateinit var keys: AdbKeyStore
     private lateinit var list: LinearLayout
-    private lateinit var logCard: LinearLayout
     private lateinit var logView: TextView
     @Volatile private var busy = false
 
@@ -63,11 +62,11 @@ class MainActivity : AppCompatActivity() {
             textSize = 11f
             setTextColor(textSecondary)
             setTextIsSelectable(true)
+            minHeight = px(96)
         }
 
-        logCard = LinearLayout(this).apply {
+        val logCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
             background = cardDrawable(bgCard, borderCard, 14)
             setPadding(px(14), px(12), px(14), px(12))
             layoutParams = LinearLayout.LayoutParams(
@@ -79,15 +78,14 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 addView(TextView(context).apply {
-                    text = "Diagnostics Log"
-                    textSize = 13f
+                    text = "Log"
+                    textSize = 14f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(textPrimary)
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
                 addView(pillButton("Clear", btnNeutral, textSecondary) {
                     logView.text = ""
-                    logCard.visibility = View.GONE
                 })
             }
             addView(header)
@@ -142,7 +140,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(px(18), px(44), px(18), px(16))
             addView(TextView(context).apply {
-                text = "Conduit"
+                text = "Nexus"
                 textSize = 26f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(textPrimary)
@@ -270,7 +268,6 @@ class MainActivity : AppCompatActivity() {
     private fun connect(p: Profile) {
         if (busy) return
         busy = true
-        logCard.visibility = View.VISIBLE
         logView.text = "Running diagnostic on ${p.host}:${p.port}...\n"
         val settings = store.settings()
         Thread {
