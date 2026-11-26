@@ -1,4 +1,4 @@
-﻿package dev.minimal.scrcpyclient.ui
+package dev.minimal.scrcpyclient.ui
 
 import android.annotation.SuppressLint
 import android.content.res.Configuration
@@ -341,6 +341,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun startAudioPlayback(scrcpySession: ScrcpySession) {
         val stream = scrcpySession.audio
         if (stream == null) {
+            android.util.Log.w("ScrcpyAudio", "scrcpySession.audio is null")
             setStatus("Audio stream unavailable")
             return
         }
@@ -348,10 +349,12 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             var track: AudioTrack? = null
             try {
                 val inp = DataInputStream(BufferedInputStream(stream.openInputStream(), 1 shl 15))
-                // Dummy byte is sent only on the first forward socket (video), not on audio
                 val codecId = inp.readInt()
+                android.util.Log.i("ScrcpyAudio", "Read audio codecId=0x${Integer.toHexString(codecId)}")
                 if (codecId != 0x72617720) {
-                    setStatus("Audio codec 0x${Integer.toHexString(codecId)} not raw PCM")
+                    val msg = "Audio codec 0x${Integer.toHexString(codecId)} not raw PCM"
+                    android.util.Log.w("ScrcpyAudio", msg)
+                    setStatus(msg)
                     return@Thread
                 }
 
@@ -379,20 +382,33 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 track.play()
 
                 val hdr = ByteArray(12)
+                var writtenFrames = 0
                 while (running) {
                     inp.readFully(hdr)
                     val bb = ByteBuffer.wrap(hdr)
                     val first = bb.getLong(0)
                     val isConfig = ((first ushr 62) and 1L) == 1L
                     val size = bb.getInt(8)
-                    if (size <= 0 || size > 1_048_576) continue
+                    if (size <= 0 || size > 1_048_576) {
+                        android.util.Log.w("ScrcpyAudio", "Skipping invalid audio packet size=$size")
+                        continue
+                    }
                     val pcm = ByteArray(size)
                     inp.readFully(pcm)
                     if (!isConfig) {
-                        track.write(pcm, 0, pcm.size)
+                        val written = track.write(pcm, 0, pcm.size)
+                        if (written < 0) {
+                            android.util.Log.e("ScrcpyAudio", "AudioTrack.write error: $written")
+                            break
+                        }
+                        writtenFrames++
+                        if (writtenFrames == 1 || writtenFrames % 250 == 0) {
+                            android.util.Log.i("ScrcpyAudio", "Wrote audio chunk #$writtenFrames bytes=$written")
+                        }
                     }
                 }
             } catch (e: Exception) {
+                android.util.Log.e("ScrcpyAudio", "Audio thread exception", e)
                 if (running) setStatus("Audio stopped: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
                 runCatching { track?.stop() }
