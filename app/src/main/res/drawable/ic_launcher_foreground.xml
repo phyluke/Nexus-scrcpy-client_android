@@ -1,0 +1,85 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outermost orbit / left interlocking circular ring (glowing emerald #2EA043) -->
+    <path
+        android:strokeColor="#2EA043"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M44.5,35 A16,16 0 1,0 44.5,67 A16,16 0 0,0 60,-5 C60.5,35" />
+
+    <!-- Innermost orbit trace & routing (left circle) -->
+    <path
+        android:strokeColor="#3FB950"
+        android:strokeWidth="0.9"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M44.5,38.5 A12.5,12.5 0 1,0 44.5,63.5 M44.5,41.5 A9.5,9.5 0 1,0 44.5,60.5" />
+
+    <!-- Left Circle Terminal Nodes -->
+    <path android:fillColor="#F0F6FC" android:pathData="M29.5,49 A1.1,1.1 0 1,1 29.5,51.2 A1.1,1.1 0 1,1 29.5,49 Z" />
+    <path android:fillColor="#3FB950" android:pathData="M38.5,37.5 A0.9,0.9 0 1,1 38.5,39.3 A0.9,0.9 0 1,1 38.5,37.5 Z" />
+    <path android:fillColor="#3FB950" android:pathData="M50.5,62 A0.9,0.9 0 1,1 50.5,63.8 A0.9,0.9 0 1,1 50.5,62 Z" />
+
+    <!-- Right interlocking circular ring (interlocking over and under, glowing emerald #2EA043) -->
+    <path
+        android:strokeColor="#2EA043"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M63.5,35 A16,16 0 1,1 63.5,67 A16,16 0 0,1 63.5,35 Z" />
+
+    <!-- Innermost orbit trace & routing (right circle) -->
+    <path
+        android:strokeColor="#3FB950"
+        android:strokeWidth="0.9"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M63.5,38.5 A12.5,12.5 0 1,1 63.5,63.5 M63.5,41.5 A9.5,9.5 0 1,1 63.5,60.5" />
+
+    <!-- Right Circle Terminal Nodes & Interface Details -->
+    <path android:fillColor="#3FB950" android:pathData="M78.5,49 A1.1,1.1 0 1,1 78.5,51.2 A1.1,1.1 0 1,1 78.5,49 Z" />
+    <path android:fillColor="#F0F6FC" android:pathData="M69.5,37.5 A0.9,0.9 0 1,1 69.5,39.3 A0.9,0.9 0 1,1 69.5,37.5 Z" />
+    <path android:fillColor="#3FB950" android:pathData="M57.5,62 A0.9,0.9 0 1,1 57.5,63.8 A0.9,0.9 0 1,1 57.5,62 Z" />
+
+    <!-- Interconnect crossover trace elements (creating the "interlocking" depth) -->
+    <path
+        android:strokeColor="#2EA043"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M49.5,39.5 A16,16 0 0,1 57.5,43.5 M49.5,62.5 A16,16 0 0,0 57.5,58.5" />
+
+    <!-- "phyluke" Subtle Monospace footer label (sized and aligned within 66dp inner safe zone) -->
+    <!-- p -->
+    <path android:fillColor="#8B949E" android:pathData="M37.5,76 h1 v2.5 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M37.5,76 h2 v1.2 h-2 z" />
+    <path android:fillColor="#8B949E" android:pathData="M39.5,76 h1 v1.6 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M37.5,77.2 h3 v1 h-3 Z" />
+    <!-- h -->
+    <path android:fillColor="#8B949E" android:pathData="M42.5,74 h1 v4.5 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M43.5,76 h1.5 v1.2 h-1.5 z" />
+    <path android:fillColor="#8B949E" android:pathData="M44.5,76.5 h1 v2 h-1 z" />
+    <!-- y -->
+    <path android:fillColor="#8B949E" android:pathData="M47.5,76 h1 v2.2 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M49.5,76 h1 v3.8 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M47.5,77.8 h3 v1 h-3 z" />
+    <!-- l -->
+    <path android:fillColor="#8B949E" android:pathData="M52.5,74 h1 v4.5 h-1 z" />
+    <!-- u -->
+    <path android:fillColor="#8B949E" android:pathData="M55.5,76 h1 v2.5 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M55.5,77.5 h2 v1 h-2 z" />
+    <path android:fillColor="#8B949E" android:pathData="M57.5,76 h1 v2.5 h-1 z" />
+    <!-- k -->
+    <path android:fillColor="#8B949E" android:pathData="M60.5,74 h1 v4.5 h-1 z" />
+    <path android:fillColor="#8B949E" android:pathData="M61.5,76 h1.2 v1 h-1.2 z" />
+    <path android:fillColor="#8B949E" android:pathData="M61.5,77 h1.4 v1.5 h-1.4 z" />
+    <!-- e -->
+    <path android:fillColor="#8B949E" android:pathData="M64.5,76 h3 v2.5 h-3 z M64.5,76 h2 v1.1 h-2 z M64.5,77.3 h2 v1 h-2 z" />
+
+</vector>
