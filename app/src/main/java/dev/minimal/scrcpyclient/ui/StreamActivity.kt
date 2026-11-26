@@ -314,13 +314,18 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun drain(c: MediaCodec) {
         val info = MediaCodec.BufferInfo()
+        var latestIndex = -1
         while (true) {
             val o = c.dequeueOutputBuffer(info, 0)
             when {
-                o >= 0 -> c.releaseOutputBuffer(o, true)
-                o == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                o >= 0 -> {
+                    if (latestIndex >= 0) c.releaseOutputBuffer(latestIndex, false)
+                    latestIndex = o
+                }
+                o == MediaCodec.INFO_TRY_AGAIN_LATER -> break
             }
         }
+        if (latestIndex >= 0) c.releaseOutputBuffer(latestIndex, true)
     }
 
     private fun fit(w: Int, h: Int) {
@@ -334,3 +339,4 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
+

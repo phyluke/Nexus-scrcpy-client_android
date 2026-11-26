@@ -1,4 +1,4 @@
-package dev.minimal.scrcpyclient.adb
+﻿package dev.minimal.scrcpyclient.adb
 
 import android.content.Context
 import dev.minimal.scrcpyclient.data.Profile
@@ -40,12 +40,22 @@ class ScrcpySession private constructor(
                 push(mgr, jar, REMOTE_JAR)
 
                 val scid = String.format("%08x", Random().nextInt() and 0x7FFFFFFF)
+                val effectiveMaxSize = if (s.maxSize > 0) minOf(s.maxSize, 1024) else 1024
+                val effectiveBitRate = if (s.bitRate > 0) minOf(s.bitRate, 2_500_000) else 2_500_000
+                val effectiveFps = if (s.maxFps > 0) minOf(s.maxFps, 60) else 60
+
                 val args = buildList {
-                    add("scid=$scid"); add("log_level=info"); add("tunnel_forward=true")
-                    add("audio=false"); add("control=true")
-                    if (s.maxSize > 0) add("max_size=${s.maxSize}")
-                    add("video_bit_rate=${s.bitRate}"); add("max_fps=${s.maxFps}")
+                    add("scid=$scid")
+                    add("log_level=info")
+                    add("tunnel_forward=true")
+                    add("audio=false")
+                    add("control=true")
+                    add("max_size=$effectiveMaxSize")
+                    add("video_bit_rate=$effectiveBitRate")
+                    add("max_fps=$effectiveFps")
+                    add("video_codec_options=i-frame-interval=1,latency=1")
                 }.joinToString(" ")
+
                 log("Starting server ...")
                 val shell = mgr.openStream(
                     "shell:CLASSPATH=$REMOTE_JAR app_process / com.genymobile.scrcpy.Server $SERVER_VERSION $args"
@@ -118,3 +128,4 @@ class ScrcpySession private constructor(
         }
     }
 }
+

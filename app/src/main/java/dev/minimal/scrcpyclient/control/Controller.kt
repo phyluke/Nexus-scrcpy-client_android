@@ -3,7 +3,7 @@
 import java.io.OutputStream
 import java.util.concurrent.LinkedBlockingQueue
 
-/** Sends control messages on a background thread so the UI thread never touches the network. */
+/** Sends control messages on a background thread with low-latency coalescing. */
 class Controller(private val out: OutputStream) {
     private val queue = LinkedBlockingQueue<ByteArray>()
     @Volatile private var alive = true
@@ -11,17 +11,21 @@ class Controller(private val out: OutputStream) {
     private val thread = Thread {
         try {
             while (alive) {
-                val m = queue.take()
-                out.write(m)
+                var msg = queue.take()
+                out.write(msg)
+                while (true) {
+                    val next = queue.poll() ?: break
+                    out.write(next)
+                }
                 out.flush()
             }
         } catch (_: Exception) { }
     }.apply { isDaemon = true; start() }
 
-    /** [droppable] messages (touch moves) are skipped when the link is congested. */
+    /** [droppable] messages (touch moves) are skipped as soon as 4+ packets are queued. */
     fun send(msg: ByteArray, droppable: Boolean = false) {
         if (!alive) return
-        if (droppable && queue.size > 40) return
+        if (droppable && queue.size >= 4) return
         queue.offer(msg)
     }
 
