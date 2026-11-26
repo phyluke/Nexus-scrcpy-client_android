@@ -396,7 +396,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     }
                     val pcm = ByteArray(size)
                     inp.readFully(pcm)
-                    if (!isConfig) { android.util.Log.v("ScrcpyAudio", "pcm=${pcm.size}")
+                    if (!isConfig) {
                         val written = track.write(pcm, 0, pcm.size)
                         if (written < 0) {
                             android.util.Log.e("ScrcpyAudio", "AudioTrack.write error: $written")
