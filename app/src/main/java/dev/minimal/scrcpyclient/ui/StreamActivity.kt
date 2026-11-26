@@ -112,7 +112,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
         updateScreenPill()
 
-        exitPill = pill("âœ• Exit") { exitSession() }
+        exitPill = pill("\u2715 Exit") { exitSession() }
 
         pillStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -124,7 +124,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         val bubbleSize = (44 * dp).toInt()
         bubbleView = TextView(this).apply {
-            text = "â€¢â€¢â€¢"
+            text = "\u2022\u2022\u2022"
             textSize = 12f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -348,6 +348,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         audioThread = Thread {
             var track: AudioTrack? = null
             try {
+                android.util.Log.i("ScrcpyAudio", "Opening audio InputStream, waiting for codecId...")
                 val inp = DataInputStream(BufferedInputStream(stream.openInputStream(), 1 shl 15))
                 val codecId = inp.readInt()
                 android.util.Log.i("ScrcpyAudio", "Read audio codecId=0x${Integer.toHexString(codecId)}")
