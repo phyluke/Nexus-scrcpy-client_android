@@ -1,4 +1,4 @@
-﻿package dev.minimal.scrcpyclient.adb
+package dev.minimal.scrcpyclient.adb
 
 import android.content.Context
 import dev.minimal.scrcpyclient.data.Profile
@@ -70,7 +70,15 @@ class ScrcpySession private constructor(
 
                 val name = "localabstract:scrcpy_$scid"
                 val video = openWithRetry(mgr, name)
-                val audioStream = runCatching { openWithRetry(mgr, name) }.getOrNull()
+                val audioStream = try {
+    log("Opening audio socket...")
+    openWithRetry(mgr, name).also {
+        log("Audio socket connected")
+    }
+} catch (e: Exception) {
+    log("Audio socket failed: ${e.javaClass.simpleName}: ${e.message}")
+    null
+}
                 val control = openWithRetry(mgr, name)
                 // Drain device->client messages (clipboard etc.) so the socket never fills up
                 Thread {
