@@ -9,15 +9,17 @@ import java.io.IOException
 import java.io.InputStream
 import java.util.Random
 
-/** A running scrcpy server on the target plus its video and control sockets. */
+/** A running scrcpy server on the target plus its video, audio, and control sockets. */
 class ScrcpySession private constructor(
     private val mgr: AbsAdbConnectionManager,
     private val shell: AdbStream,
     val video: AdbStream,
+    val audio: AdbStream?,
     val control: AdbStream,
 ) {
     fun close() {
         runCatching { control.close() }
+        runCatching { audio?.close() }
         runCatching { video.close() }
         runCatching { shell.close() }
         runCatching { mgr.disconnect() }
@@ -48,7 +50,8 @@ class ScrcpySession private constructor(
                     add("scid=$scid")
                     add("log_level=info")
                     add("tunnel_forward=true")
-                    add("audio=false")
+                    add("audio=true")
+                    add("audio_codec=raw")
                     add("control=true")
                     add("max_size=$effectiveMaxSize")
                     add("video_bit_rate=$effectiveBitRate")
@@ -67,6 +70,7 @@ class ScrcpySession private constructor(
 
                 val name = "localabstract:scrcpy_$scid"
                 val video = openWithRetry(mgr, name)
+                val audioStream = runCatching { openWithRetry(mgr, name) }.getOrNull()
                 val control = openWithRetry(mgr, name)
                 // Drain device->client messages (clipboard etc.) so the socket never fills up
                 Thread {
@@ -74,7 +78,7 @@ class ScrcpySession private constructor(
                     catch (_: Exception) { }
                 }.apply { isDaemon = true }.start()
 
-                return ScrcpySession(mgr, shell, video, control)
+                return ScrcpySession(mgr, shell, video, audioStream, control)
             } catch (e: Exception) {
                 runCatching { mgr.disconnect() }
                 throw e
@@ -128,4 +132,3 @@ class ScrcpySession private constructor(
         }
     }
 }
-

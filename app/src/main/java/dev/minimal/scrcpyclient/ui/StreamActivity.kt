@@ -4,6 +4,9 @@ import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
@@ -37,7 +40,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import kotlin.math.hypot
 
-/** Fullscreen touch-controlled stream: ADB -> scrcpy video socket -> MediaCodec -> SurfaceView. */
+/** Fullscreen touch-controlled stream: ADB -> scrcpy video/audio sockets -> MediaCodec/AudioTrack. */
 class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private lateinit var container: FrameLayout
@@ -48,6 +51,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var pillStrip: LinearLayout
     private var settings = StreamSettings()
     private var worker: Thread? = null
+    private var audioThread: Thread? = null
     private var lastVolDownTime = 0L
     private var pillsExpanded = false
 
@@ -296,6 +300,64 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         status.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     }
 
+    private fun startAudioPlayback(audioStream: dev.minimal.scrcpyclient.adb.AdbStream?) {
+        val stream = audioStream ?: return
+        audioThread = Thread {
+            var track: AudioTrack? = null
+            try {
+                val inp = DataInputStream(BufferedInputStream(stream.openInputStream(), 1 shl 15))
+                inp.readByte()
+                val codecId = inp.readInt()
+                if (codecId != 0x72617720) return@Thread // Only raw PCM ("raw ") is played directly here
+
+                val sampleRate = 48_000
+                val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
+                val encoding = AudioFormat.ENCODING_PCM_16BIT
+                val minBuf = AudioTrack.getMinBufferSize(sampleRate, channelConfig, encoding).coerceAtLeast(16_384)
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(channelConfig)
+                            .setEncoding(encoding)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBuf * 2)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+                track.play()
+
+                val hdr = ByteArray(12)
+                while (running) {
+                    inp.readFully(hdr)
+                    val bb = ByteBuffer.wrap(hdr)
+                    val first = bb.getLong(0)
+                    val isConfig = ((first ushr 62) and 1L) == 1L
+                    val size = bb.getInt(8)
+                    if (size <= 0 || size > 1_048_576) continue
+                    val pcm = ByteArray(size)
+                    inp.readFully(pcm)
+                    if (!isConfig) {
+                        track.write(pcm, 0, pcm.size)
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                runCatching { track?.stop() }
+                runCatching { track?.release() }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+    }
+
     private fun startWorker(surface: Surface) {
         val store = AppStore(this)
         val profile = store.profiles().firstOrNull { it.id == intent.getStringExtra("profileId") }
@@ -314,6 +376,8 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     s.close()
                     return@Thread
                 }
+                startAudioPlayback(s.audio)
+
                 val ctl = Controller(s.control.openOutputStream())
                 controller = ctl
 
@@ -385,6 +449,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val s = session
         val restoreScreen = !targetScreenOn
         worker = null
+        audioThread = null
         Thread {
             if (restoreScreen) {
                 ctl?.send(ControlMessages.displayPower(true))
