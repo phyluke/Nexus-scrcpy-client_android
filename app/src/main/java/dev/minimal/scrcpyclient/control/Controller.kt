@@ -1,4 +1,4 @@
-package dev.minimal.scrcpyclient.control
+﻿package dev.minimal.scrcpyclient.control
 
 import java.io.OutputStream
 import java.util.concurrent.LinkedBlockingQueue
@@ -23,11 +23,6 @@ class Controller(private val out: OutputStream) {
         if (!alive) return
         if (droppable && queue.size > 40) return
         queue.offer(msg)
-    }
-
-    fun click(keycode: Int) {
-        send(ControlMessages.key(ControlMessages.ACTION_DOWN, keycode))
-        send(ControlMessages.key(ControlMessages.ACTION_UP, keycode))
     }
 
     fun close() { alive = false; thread.interrupt() }
