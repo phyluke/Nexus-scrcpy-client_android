@@ -41,6 +41,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var container: FrameLayout
     private lateinit var surfaceView: SurfaceView
     private lateinit var status: TextView
+    private lateinit var screenPill: TextView
     private var settings = StreamSettings()
     private var worker: Thread? = null
     private var lastVolDownTime = 0L
@@ -88,26 +89,26 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             text = label
             textSize = 12f
             setTextColor(Color.WHITE)
-            setPadding((12 * dp).toInt(), (7 * dp).toInt(), (12 * dp).toInt(), (7 * dp).toInt())
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#99000000"))
-                cornerRadius = 20 * dp
-                setStroke((1 * dp).toInt(), Color.parseColor("#55FFFFFF"))
-            }
+            setPadding((14 * dp).toInt(), (7 * dp).toInt(), (14 * dp).toInt(), (7 * dp).toInt())
+            background = pillBg(isGreen = false)
             setOnClickListener { onClick() }
         }
 
+        screenPill = pill("Screen") {
+            targetScreenOn = !targetScreenOn
+            updateScreenPill()
+            controller?.send(ControlMessages.displayPower(targetScreenOn))
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = (8 * dp).toInt() }
+        }
+        updateScreenPill()
+
         val topControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pill("Screen") {
-                targetScreenOn = !targetScreenOn
-                controller?.send(ControlMessages.displayPower(targetScreenOn))
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = (8 * dp).toInt() }
-            })
+            addView(screenPill)
             addView(pill("✕ Exit") { exitSession() })
         }
 
@@ -120,7 +121,6 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
             marginEnd = (12 * dp).toInt()
         }
 
-        // Initial 1x1 SurfaceView prevents Surface destruction when fit() scales to video dimensions
         container = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView, FrameLayout.LayoutParams(1, 1, Gravity.CENTER))
@@ -137,6 +137,26 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         setContentView(container)
         surfaceView.holder.addCallback(this)
+    }
+
+    private fun pillBg(isGreen: Boolean): GradientDrawable {
+        val dp = resources.displayMetrics.density
+        return GradientDrawable().apply {
+            setColor(if (isGreen) Color.parseColor("#662E7D32") else Color.parseColor("#99000000"))
+            cornerRadius = 20 * dp
+            setStroke(
+                (1 * dp).toInt(),
+                if (isGreen) Color.parseColor("#AA66BB6A") else Color.parseColor("#55FFFFFF")
+            )
+        }
+    }
+
+    private fun updateScreenPill() {
+        runOnUiThread {
+            if (::screenPill.isInitialized) {
+                screenPill.background = pillBg(isGreen = targetScreenOn)
+            }
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -255,9 +275,11 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             ctl.send(ControlMessages.backOrScreenOn(ControlMessages.ACTION_UP))
                             if (settings.screenOff) {
                                 targetScreenOn = false
+                                updateScreenPill()
                                 ctl.send(ControlMessages.displayPower(false))
                             } else {
                                 targetScreenOn = true
+                                updateScreenPill()
                             }
                         }
                     }
@@ -349,5 +371,3 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
-
-
