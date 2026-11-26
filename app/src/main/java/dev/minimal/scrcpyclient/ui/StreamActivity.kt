@@ -11,7 +11,6 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
-import io.github.muntashirakon.adb.AdbStream
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -301,7 +300,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         status.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     }
 
-    private fun startAudioPlayback(audioStream: dev.minimal.scrcpyclient.adb.AdbStream?) {
+    private fun startAudioPlayback(audioStream: Any?) {
         val stream = audioStream ?: return
         audioThread = Thread {
             var track: AudioTrack? = null
@@ -516,4 +515,5 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
     }
 }
+
 
