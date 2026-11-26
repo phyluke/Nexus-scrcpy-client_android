@@ -1,3 +1,28 @@
-# Scrcpy Client (minimal, open source)
-Android -> Android scrcpy client over Wireless ADB. INTERNET permission only, no telemetry.
-Drop the official `scrcpy-server` into `app/src/main/assets/`, push, download the APK from the Actions artifacts.
+# Nexus Scrcpy Client
+
+Minimal, zero-telemetry Android-to-Android scrcpy client over Wireless ADB. Built from scratch in Kotlin with low-latency raw PCM audio streaming and a lightweight floating control bubble.
+
+## Features
+
+- **Android-to-Android Streaming:** View and control a target Android device directly from another Android device over Wireless ADB (`adb connect <ip>:<port>`).
+- **Low-Latency Raw PCM Audio:** Streams 48 kHz 16-bit stereo raw PCM audio (`0x726177` / `0x72617720`) directly into Android `AudioTrack` with minimal buffering delay.
+- **Hardware Video Decoding:** Uses `MediaCodec` for smooth, low-overhead H.264/video surface rendering.
+- **Floating Control Bubble:** Compact collapsible `•••` pill with quick-access `Screen` and `✕ Exit` controls that expands cleanly without obstructing the stream.
+- **Minimal & Zero-Telemetry:** Requires only the `INTERNET` permission—no analytics, no background trackers, and no third-party SDK bloat.
+- **Automated CI Builds:** GitHub Actions automatically builds and packages `nexus_scrcpy_phyluke.apk` on every push to `main`.
+
+## Architecture & Tech Stack
+
+- **Language:** Kotlin (100%)
+- **ADB Transport:** `libadb-android` over TCP/Wireless ADB
+- **Video Pipeline:** Android `MediaCodec` + `SurfaceView`
+- **Audio Pipeline:** Raw PCM stream (`0x726177` / `0x72617720`) -> `AudioTrack`
+- **CI/CD:** GitHub Actions (`.github/workflows`)
+
+## Setup & Usage
+
+1. **Bundle `scrcpy-server`:** Place the compatible `scrcpy-server` binary inside `app/src/main/assets/`.
+2. **Build APK:** Push to `main` (or trigger the GitHub Actions workflow) and download `nexus_scrcpy_phyluke.apk` from the workflow artifacts or Releases page.
+3. **Enable Wireless ADB on Target Device:**
+   ```bash
+   adb tcpip 5555
