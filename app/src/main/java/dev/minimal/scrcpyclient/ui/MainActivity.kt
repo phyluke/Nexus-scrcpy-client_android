@@ -1,96 +1,145 @@
 package dev.minimal.scrcpyclient.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
+import android.graphics.Typeface
 import android.os.Bundle
+import android.text.InputType
 import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import dev.minimal.scrcpyclient.adb.AdbKeyStore
+import dev.minimal.scrcpyclient.adb.ScrcpyDiagnostic
+import dev.minimal.scrcpyclient.data.AppStore
+import dev.minimal.scrcpyclient.data.Profile
+import dev.minimal.scrcpyclient.data.StreamSettings
+import dev.minimal.scrcpyclient.data.Units
+import java.util.UUID
 
-/** Temporary screen to exercise key generate / import / export. Device list comes next. */
+/** Device list + settings + diagnostic connect (video screen comes next). */
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var store: AppStore
     private lateinit var keys: AdbKeyStore
-    private lateinit var info: TextView
-
-    private val importKey = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@registerForActivityResult
-        try {
-            val pem = contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) }
-            keys.importPrivateKeyPem(pem)
-            toast("Key imported")
-        } catch (e: Exception) {
-            toast("Import failed: ${e.message}")
-        }
-        refresh()
-    }
-
-    private val exportPub = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
-        if (uri == null) return@registerForActivityResult
-        try {
-            contentResolver.openOutputStream(uri)!!.use { it.write(keys.publicKeyAdbFormat().toByteArray()) }
-            toast("Saved adbkey.pub")
-        } catch (e: Exception) {
-            toast("Export failed: ${e.message}")
-        }
-    }
+    private lateinit var list: LinearLayout
+    private lateinit var logView: TextView
+    @Volatile private var busy = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        keys = AdbKeyStore(this)
-        keys.ensureKey()
+        store = AppStore(this)
+        keys = AdbKeyStore(this).also { it.ensureKey() }
 
-        info = TextView(this).apply { setTextIsSelectable(true) }
+        list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        logView = TextView(this).apply {
+            typeface = Typeface.MONOSPACE; textSize = 11f; setTextIsSelectable(true)
+        }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 96, 48, 48)
-            addView(info)
-            addView(button("Import ADB key (adbkey)") { importKey.launch(arrayOf("*/*")) })
-            addView(button("Save adbkey.pub to file") { exportPub.launch("adbkey.pub") })
-            addView(button("Share public key") { sharePub() })
-            addView(button("Copy public key") { copyPub() })
-            addView(button("Generate new key") { confirmRegenerate() })
+            setPadding(32, 96, 32, 32)
+            addView(TextView(context).apply { text = "Devices"; textSize = 22f })
+            addView(list)
+            addView(button("Add device") { editProfile(null) })
+            addView(button("Stream settings") { editSettings() })
+            addView(button("ADB keys") { startActivity(Intent(context, KeysActivity::class.java)) })
+            addView(TextView(context).apply { text = "\nLog"; textSize = 16f })
+            addView(logView)
         }
         setContentView(ScrollView(this).apply { addView(root) })
-        refresh()
+        renderList()
     }
 
-    private fun refresh() {
-        info.text = "ADB key ready\nFingerprint: ${keys.fingerprint()}\n\nPublic key:\n${keys.publicKeyAdbFormat()}"
-    }
-
-    private fun sharePub() {
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, keys.publicKeyAdbFormat())
+    private fun renderList() {
+        list.removeAllViews()
+        for (p in store.profiles()) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(TextView(context).apply {
+                    text = "${p.label}\n${p.host}:${p.port}"
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(button("Connect") { connect(p) })
+                addView(button("Edit") { editProfile(p) })
+            }
+            list.addView(row)
         }
-        startActivity(Intent.createChooser(send, "Share adbkey.pub"))
     }
 
-    private fun copyPub() {
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("adbkey.pub", keys.publicKeyAdbFormat()))
-        toast("Copied")
+    private fun connect(p: Profile) {
+        if (busy) return
+        busy = true
+        logView.text = ""
+        val settings = store.settings()
+        Thread {
+            ScrcpyDiagnostic(applicationContext, keys).run(p, settings) { line ->
+                runOnUiThread { logView.append(line + "\n") }
+            }
+            busy = false
+        }.start()
     }
 
-    private fun confirmRegenerate() {
-        AlertDialog.Builder(this)
-            .setMessage("Replace the current key? Devices that authorized it will need the new public key.")
-            .setPositiveButton("Replace") { _, _ -> keys.generate(); refresh() }
+    private fun editProfile(existing: Profile?) {
+        val label = field("Label", existing?.label ?: "")
+        val host = field("IP address", existing?.host ?: "")
+        val port = field("Port", (existing?.port ?: 5555).toString(), numeric = true)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0)
+            addView(label); addView(host); addView(port)
+        }
+        val b = AlertDialog.Builder(this).setTitle(if (existing == null) "Add device" else "Edit device").setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val h = host.text.toString().trim()
+                if (h.isEmpty()) return@setPositiveButton
+                val updated = Profile(
+                    existing?.id ?: UUID.randomUUID().toString(),
+                    label.text.toString().trim().ifEmpty { h },
+                    h,
+                    port.text.toString().toIntOrNull() ?: 5555,
+                )
+                val all = store.profiles().filter { it.id != updated.id } + updated
+                store.saveProfiles(all.sortedBy { it.label.lowercase() })
+                renderList()
+            }
             .setNegativeButton("Cancel", null)
-            .show()
+        if (existing != null) b.setNeutralButton("Delete") { _, _ ->
+            store.saveProfiles(store.profiles().filter { it.id != existing.id }); renderList()
+        }
+        b.show()
+    }
+
+    private fun editSettings() {
+        val s = store.settings()
+        val maxSize = field("Max size (720, 1080, 0 = native)", s.maxSize.toString(), numeric = true)
+        val bitrate = field("Bitrate (2M, 4M, 8M)", Units.formatBitRate(s.bitRate))
+        val fps = field("Max FPS", s.maxFps.toString(), numeric = true)
+        val nav = CheckBox(this).apply { text = "Show navigation bar overlay"; isChecked = s.navBar }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0)
+            addView(maxSize); addView(bitrate); addView(fps); addView(nav)
+        }
+        AlertDialog.Builder(this).setTitle("Stream settings").setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                store.saveSettings(
+                    StreamSettings(
+                        maxSize = maxSize.text.toString().toIntOrNull() ?: s.maxSize,
+                        bitRate = Units.parseBitRate(bitrate.text.toString()) ?: s.bitRate,
+                        maxFps = fps.text.toString().toIntOrNull() ?: s.maxFps,
+                        navBar = nav.isChecked,
+                    )
+                )
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun field(hint: String, value: String, numeric: Boolean = false) = EditText(this).apply {
+        this.hint = hint; setText(value)
+        if (numeric) inputType = InputType.TYPE_CLASS_NUMBER
     }
 
     private fun button(label: String, onClick: () -> Unit) =
         Button(this).apply { text = label; setOnClickListener { onClick() } }
-
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 }
