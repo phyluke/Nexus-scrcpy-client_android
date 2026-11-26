@@ -112,7 +112,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
         updateScreenPill()
 
-        exitPill = pill("✕ Exit") { exitSession() }
+        exitPill = pill("âœ• Exit") { exitSession() }
 
         pillStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -124,7 +124,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         val bubbleSize = (44 * dp).toInt()
         bubbleView = TextView(this).apply {
-            text = "•••"
+            text = "â€¢â€¢â€¢"
             textSize = 12f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -395,7 +395,7 @@ class StreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     }
                     val pcm = ByteArray(size)
                     inp.readFully(pcm)
-                    if (!isConfig) {
+                    if (!isConfig) { android.util.Log.v("ScrcpyAudio", "pcm=${pcm.size}")
                         val written = track.write(pcm, 0, pcm.size)
                         if (written < 0) {
                             android.util.Log.e("ScrcpyAudio", "AudioTrack.write error: $written")
