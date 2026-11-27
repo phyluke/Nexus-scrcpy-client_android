@@ -1,0 +1,296 @@
+package dev.minimal.scrcpyclient.ui
+
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import android.text.InputType
+import android.view.Gravity
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import dev.minimal.scrcpyclient.ssh.ActiveSshShell
+import dev.minimal.scrcpyclient.ssh.SshConnector
+import java.io.InputStreamReader
+
+/** Conduit-style SSH terminal screen requiring a password prompt per new login (askpw). */
+class SshTerminalActivity : AppCompatActivity() {
+
+    private lateinit var termView: TextView
+    private lateinit var termScroll: ScrollView
+    private lateinit var cmdInput: EditText
+    private var shellSession: ActiveSshShell? = null
+    @Volatile private var readerActive = false
+
+    private var label: String = "SSH Host"
+    private var host: String = ""
+    private var port: Int = 22
+    private var username: String = ""
+
+    private val bgPage = Color.parseColor("#0D1117")
+    private val bgTerm = Color.parseColor("#090C10")
+    private val bgCard = Color.parseColor("#161B22")
+    private val borderCard = Color.parseColor("#30363D")
+    private val textPrimary = Color.parseColor("#F0F6FC")
+    private val textSecondary = Color.parseColor("#8B949E")
+    private val textMuted = Color.parseColor("#484F58")
+    private val accentGreen = Color.parseColor("#238636")
+    private val btnNeutral = Color.parseColor("#21262D")
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        supportActionBar?.hide()
+        window.statusBarColor = bgPage
+        window.navigationBarColor = bgPage
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
+
+        label = intent.getStringExtra(EXTRA_LABEL)?.trim().orEmpty().ifEmpty { "SSH Host" }
+        host = intent.getStringExtra(EXTRA_HOST)?.trim().orEmpty()
+        port = intent.getIntExtra(EXTRA_PORT, 22)
+        username = intent.getStringExtra(EXTRA_USER)?.trim().orEmpty()
+
+        val dp = resources.displayMetrics.density
+        fun px(v: Int) = (v * dp).toInt()
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(pillButton("Back", btnNeutral, textPrimary) { finish() }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = px(10) }
+            })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(context).apply {
+                    text = "SSH Terminal — $label"
+                    textSize = 18f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                    maxLines = 1
+                })
+                addView(TextView(context).apply {
+                    text = if (host.isNotEmpty() && username.isNotEmpty()) "$username@$host:$port (askpw)" else "Missing SSH target"
+                    textSize = 12f
+                    typeface = Typeface.MONOSPACE
+                    setTextColor(textSecondary)
+                })
+            })
+            addView(pillButton("Re-Auth", btnNeutral, textSecondary) { promptPasswordAndConnect() }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = px(6) }
+            })
+            addView(pillButton("Clear", btnNeutral, textSecondary) { termView.text = "" })
+        }
+
+        termView = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 12f
+            setTextColor(Color.parseColor("#E6EDF3"))
+            setTextIsSelectable(true)
+            setPadding(px(12), px(12), px(12), px(12))
+        }
+
+        termScroll = ScrollView(this).apply {
+            background = cardDrawable(bgTerm, borderCard, 12)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            ).apply {
+                topMargin = px(10)
+                bottomMargin = px(10)
+            }
+            addView(termView)
+        }
+
+        cmdInput = EditText(this).apply {
+            hint = "Send SSH command..."
+            setHintTextColor(textMuted)
+            setTextColor(textPrimary)
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            setSingleLine(true)
+            background = cardDrawable(bgCard, borderCard, 10)
+            setPadding(px(12), px(10), px(12), px(10))
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply { marginEnd = px(8) }
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEND) {
+                    sendCurrentInput()
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        val sendBtn = pillButton("Send", accentGreen, Color.WHITE, fill = true) {
+            sendCurrentInput()
+        }
+
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(cmdInput)
+            addView(sendBtn)
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(16), px(36), px(16), px(16))
+            addView(header)
+            addView(termScroll)
+            addView(inputRow)
+        }
+
+        setContentView(root.apply { setBackgroundColor(bgPage) })
+
+        if (host.isEmpty() || username.isEmpty()) {
+            appendTerm("Missing SSH host or username.\n")
+        } else {
+            promptPasswordAndConnect()
+        }
+    }
+
+    private fun promptPasswordAndConnect() {
+        closeExistingSession()
+        val pwInput = EditText(this).apply {
+            hint = "Enter SSH password for $username@$host"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        AlertDialog.Builder(this)
+            .setTitle("SSH Login (askpw)")
+            .setMessage("Saved profile: $username@$host:$port\nPassword is required for each login and is not saved.")
+            .setView(pwInput)
+            .setCancelable(false)
+            .setPositiveButton("Connect") { _, _ ->
+                val oneTimePw = pwInput.text.toString()
+                pwInput.setText("")
+                connectWithPassword(oneTimePw)
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                pwInput.setText("")
+                finish()
+            }
+            .show()
+    }
+
+    private fun connectWithPassword(oneTimePassword: String) {
+        appendTerm("Connecting to $username@$host:$port ...\n")
+        Thread {
+            var pwCopy: String? = oneTimePassword
+            try {
+                val active = SshConnector.connectShell(
+                    host = host,
+                    port = port,
+                    username = username,
+                    oneTimePassword = pwCopy.orEmpty(),
+                )
+                pwCopy = null
+                shellSession = active
+                readerActive = true
+                appendTerm("Authenticated. SSH shell ready.\n")
+
+                val reader = InputStreamReader(active.input, Charsets.UTF_8)
+                val buf = CharArray(1024)
+                while (readerActive) {
+                    val n = reader.read(buf)
+                    if (n < 0) break
+                    val text = String(buf, 0, n).replace("\r\n", "\n")
+                    appendTerm(text)
+                }
+            } catch (e: Exception) {
+                pwCopy = null
+                appendTerm("\n[SSH error: ${e.javaClass.simpleName}: ${e.message}]\n")
+            } finally {
+                readerActive = false
+            }
+        }.start()
+    }
+
+    private fun sendCurrentInput() {
+        val active = shellSession
+        if (active == null || !readerActive) {
+            appendTerm("[Not connected — tap Re-Auth to enter password]\n")
+            return
+        }
+        val cmd = cmdInput.text.toString()
+        cmdInput.setText("")
+        Thread {
+            try {
+                active.sendCommand(cmd)
+            } catch (e: Exception) {
+                appendTerm("\n[Send failed: ${e.message}]\n")
+            }
+        }.start()
+    }
+
+    private fun appendTerm(chunk: String) {
+        runOnUiThread {
+            termView.append(chunk)
+            termScroll.post { termScroll.fullScroll(ScrollView.FOCUS_DOWN) }
+        }
+    }
+
+    private fun closeExistingSession() {
+        readerActive = false
+        val current = shellSession
+        shellSession = null
+        if (current != null) {
+            Thread { current.close() }.start()
+        }
+    }
+
+    override fun onDestroy() {
+        closeExistingSession()
+        super.onDestroy()
+    }
+
+    private fun cardDrawable(fill: Int, stroke: Int, radiusDp: Int): GradientDrawable {
+        val dp = resources.displayMetrics.density
+        return GradientDrawable().apply {
+            setColor(fill)
+            cornerRadius = radiusDp * dp
+            setStroke((1 * dp).toInt(), stroke)
+        }
+    }
+
+    private fun pillButton(
+        label: String, bg: Int, fg: Int, fill: Boolean = false, onClick: () -> Unit
+    ) = TextView(this).apply {
+        val dp = resources.displayMetrics.density
+        text = label
+        textSize = 12f
+        setTypeface(null, Typeface.BOLD)
+        setTextColor(fg)
+        gravity = Gravity.CENTER
+        setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
+        background = cardDrawable(
+            bg,
+            if (fill && bg == accentGreen) Color.parseColor("#2EA043") else borderCard,
+            10
+        )
+        setOnClickListener { onClick() }
+    }
+
+    companion object {
+        const val EXTRA_LABEL = "label"
+        const val EXTRA_HOST = "host"
+        const val EXTRA_PORT = "port"
+        const val EXTRA_USER = "username"
+    }
+}

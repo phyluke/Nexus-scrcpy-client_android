@@ -36,5 +36,9 @@
             android:name=".ui.AdbShellActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".ui.SshTerminalActivity"
+            android:exported="false" />
+
     </application>
 </manifest>

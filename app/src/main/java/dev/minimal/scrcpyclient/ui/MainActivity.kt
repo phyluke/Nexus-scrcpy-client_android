@@ -24,15 +24,19 @@ import dev.minimal.scrcpyclient.data.AppStore
 import dev.minimal.scrcpyclient.data.Profile
 import dev.minimal.scrcpyclient.data.StreamSettings
 import dev.minimal.scrcpyclient.data.Units
+import dev.minimal.scrcpyclient.ssh.SshHostProfile
+import dev.minimal.scrcpyclient.ssh.SshProfileStore
 import java.io.File
 import java.util.UUID
 
-/** Main hub for scrcpy streaming, full ADB toolkit (shell, TCP/wireless ADB, push/install), and diagnostics. */
+/** Main hub for scrcpy streaming, full ADB toolkit, and Conduit SSH (askpw) terminal sessions. */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var store: AppStore
+    private lateinit var sshStore: SshProfileStore
     private lateinit var keys: AdbKeyStore
     private lateinit var list: LinearLayout
+    private lateinit var sshList: LinearLayout
     private lateinit var logCard: LinearLayout
     private lateinit var logView: TextView
     private lateinit var cmdInput: EditText
@@ -59,6 +63,7 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
 
         store = AppStore(this)
+        sshStore = SshProfileStore(this)
         keys = AdbKeyStore(this).also { it.ensureKey() }
         selectedProfile = store.profiles().firstOrNull()
 
@@ -66,6 +71,7 @@ class MainActivity : AppCompatActivity() {
         fun px(v: Int) = (v * dp).toInt()
 
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        sshList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         logView = TextView(this).apply {
             typeface = Typeface.MONOSPACE
@@ -131,9 +137,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val adbHubCard = buildAdbHubCard(dp)
+        val conduitCard = buildConduitCard(dp)
 
         val footer = TextView(this).apply {
-            text = "Nexus Hub â€¢ phyluke"
+            text = "Nexus Hub - phyluke"
             textSize = 12f
             typeface = Typeface.MONOSPACE
             setTextColor(textMuted)
@@ -151,7 +158,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(textPrimary)
             })
             addView(TextView(context).apply {
-                text = "scrcpy â€¢ ADB â€¢ Terminal Hub"
+                text = "scrcpy - ADB - Conduit SSH Terminal"
                 textSize = 13f
                 setTextColor(textSecondary)
                 setPadding(0, px(2), 0, px(16))
@@ -159,6 +166,7 @@ class MainActivity : AppCompatActivity() {
             addView(list)
             addView(actionBar)
             addView(adbHubCard)
+            addView(conduitCard)
             addView(logCard)
             addView(footer)
         }
@@ -169,6 +177,173 @@ class MainActivity : AppCompatActivity() {
             addView(root)
         })
         renderList()
+        renderSshList()
+    }
+
+    private fun buildConduitCard(dp: Float): LinearLayout {
+        fun px(v: Int) = (v * dp).toInt()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardDrawable(bgCard, borderCard, 14)
+            setPadding(px(14), px(14), px(14), px(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = px(14) }
+
+            val topRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(context).apply {
+                        text = "Conduit SSH (askpw)"
+                        textSize = 15f
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(textPrimary)
+                    })
+                    addView(TextView(context).apply {
+                        text = "Saved host/port/user - prompts password every login"
+                        textSize = 12f
+                        setTextColor(textSecondary)
+                        setPadding(0, px(2), 0, 0)
+                    })
+                })
+                addView(pillButton("+ SSH Host", accentBlue, Color.WHITE, fill = true) {
+                    editSshProfile(null)
+                })
+            }
+            addView(topRow)
+            addView(sshList.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = px(10) }
+            })
+        }
+    }
+
+    private fun renderSshList() {
+        val dp = resources.displayMetrics.density
+        fun px(v: Int) = (v * dp).toInt()
+        sshList.removeAllViews()
+
+        val hosts = sshStore.profiles()
+        if (hosts.isEmpty()) {
+            sshList.addView(TextView(this).apply {
+                text = "No SSH hosts saved yet. Tap + SSH Host to add one."
+                textSize = 12f
+                setTextColor(textSecondary)
+                background = cardDrawable(bgInput, borderCard, 10)
+                setPadding(px(12), px(12), px(12), px(12))
+            })
+            return
+        }
+
+        for (h in hosts) {
+            val rowCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardDrawable(bgInput, borderCard, 10)
+                setPadding(px(12), px(10), px(12), px(10))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = px(8) }
+
+                val top = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        addView(TextView(context).apply {
+                            text = h.label
+                            textSize = 15f
+                            setTypeface(null, Typeface.BOLD)
+                            setTextColor(textPrimary)
+                        })
+                        addView(TextView(context).apply {
+                            text = "${h.username}@${h.host}:${h.port}  [askpw]"
+                            textSize = 12f
+                            typeface = Typeface.MONOSPACE
+                            setTextColor(textSecondary)
+                        })
+                    })
+                    addView(pillButton("Login", accentGreen, Color.WHITE, fill = true) {
+                        openSshTerminal(h)
+                    }.apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = px(6) }
+                    })
+                    addView(pillButton("Edit", btnNeutral, textSecondary) {
+                        editSshProfile(h)
+                    })
+                }
+                addView(top)
+            }
+            sshList.addView(rowCard)
+        }
+    }
+
+    private fun editSshProfile(existing: SshHostProfile?) {
+        val labelField = field("Label (e.g. NAS SSH)", existing?.label ?: "")
+        val hostField = field("Host / IP", existing?.host ?: "")
+        val portField = field("Port (default 22)", (existing?.port ?: 22).toString(), numeric = true)
+        val userField = field("Username", existing?.username ?: "")
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 20, 48, 8)
+            addView(labelField)
+            addView(hostField)
+            addView(portField)
+            addView(userField)
+        }
+
+        val builder = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add SSH Host (askpw)" else "Edit SSH Host (askpw)")
+            .setMessage("Passwords are never saved; you will be prompted on every login.")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val hostVal = hostField.text.toString().trim()
+                val userVal = userField.text.toString().trim()
+                if (hostVal.isEmpty() || userVal.isEmpty()) return@setPositiveButton
+                val lbl = labelField.text.toString().trim().ifEmpty { "$userVal@$hostVal" }
+                val prt = portField.text.toString().toIntOrNull() ?: 22
+                sshStore.upsert(
+                    SshHostProfile(
+                        id = existing?.id ?: sshStore.newId(),
+                        label = lbl,
+                        host = hostVal,
+                        port = prt,
+                        username = userVal,
+                        askPasswordEveryLogin = true,
+                    )
+                )
+                renderSshList()
+            }
+            .setNegativeButton("Cancel", null)
+
+        if (existing != null) {
+            builder.setNeutralButton("Delete") { _, _ ->
+                sshStore.delete(existing.id)
+                renderSshList()
+            }
+        }
+        builder.show()
+    }
+
+    private fun openSshTerminal(profile: SshHostProfile) {
+        val intent = Intent(this, SshTerminalActivity::class.java).apply {
+            putExtra(SshTerminalActivity.EXTRA_LABEL, profile.label)
+            putExtra(SshTerminalActivity.EXTRA_HOST, profile.host)
+            putExtra(SshTerminalActivity.EXTRA_PORT, profile.port)
+            putExtra(SshTerminalActivity.EXTRA_USER, profile.username)
+        }
+        startActivity(intent)
     }
 
     private fun buildAdbHubCard(dp: Float): LinearLayout {
