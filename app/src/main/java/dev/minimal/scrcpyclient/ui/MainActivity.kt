@@ -199,8 +199,61 @@ class MainActivity : AppCompatActivity() {
         val conduitCard = buildConduitCard(dp)
         val adbHubCard = buildAdbHubCard(dp)
 
+        val modeTilesRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = px(14) }
+
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardDrawable(bgCard, borderCard, 14)
+                setPadding(px(14), px(14), px(14), px(14))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { marginEnd = px(8) }
+                addView(TextView(context).apply {
+                    text = "ADB"
+                    textSize = 16f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                })
+                addView(TextView(context).apply {
+                    text = "Hosts & shell"
+                    textSize = 12f
+                    setTextColor(textSecondary)
+                    setPadding(0, px(2), 0, 0)
+                })
+                setOnClickListener {
+                    startActivity(Intent(context, AdbFullScreenActivity::class.java))
+                }
+            })
+
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardDrawable(bgCard, borderCard, 14)
+                setPadding(px(14), px(14), px(14), px(14))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(context).apply {
+                    text = "scrcpy"
+                    textSize = 16f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                })
+                addView(TextView(context).apply {
+                    text = "Mirror sessions"
+                    textSize = 12f
+                    setTextColor(textSecondary)
+                    setPadding(0, px(2), 0, 0)
+                })
+                setOnClickListener {
+                    startActivity(Intent(context, ScrcpyFullScreenActivity::class.java))
+                }
+            })
+        }
+
         val footer = TextView(this).apply {
-            text = "Nexus Hub - phyluke"
+            text = "power by phyluke"
             textSize = 12f
             typeface = Typeface.MONOSPACE
             setTextColor(textMuted)
@@ -233,6 +286,7 @@ class MainActivity : AppCompatActivity() {
             })
             addView(actionBar)
             addView(adbHubCard)
+            addView(modeTilesRow)
             addView(logCard)
             addView(footer)
         }

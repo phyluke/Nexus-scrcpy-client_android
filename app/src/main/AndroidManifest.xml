@@ -37,6 +37,14 @@
             android:exported="false" />
 
         <activity
+            android:name=".ui.AdbFullScreenActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.ScrcpyFullScreenActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".ui.SshTerminalActivity"
             android:exported="false" />
 
