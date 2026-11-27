@@ -18,6 +18,8 @@ data class SshHostProfile(
     val port: Int = 22,
     val username: String,
     val askPasswordEveryLogin: Boolean = true,
+    val timeoutSec: Int = 12,
+    val startTmux: Boolean = false,
 )
 
 class SshProfileStore(context: Context) {
@@ -36,6 +38,8 @@ class SshProfileStore(context: Context) {
                 port = o.optInt("port", 22),
                 username = o.getString("username"),
                 askPasswordEveryLogin = true,
+                timeoutSec = o.optInt("timeoutSec", 12),
+                startTmux = o.optBoolean("startTmux", false),
             )
         }
     }
@@ -51,6 +55,8 @@ class SshProfileStore(context: Context) {
                     .put("port", p.port)
                     .put("username", p.username)
                     .put("askPasswordEveryLogin", true)
+                    .put("timeoutSec", p.timeoutSec)
+                    .put("startTmux", p.startTmux)
             )
         }
         prefs.edit().putString("profiles", arr.toString()).apply()
@@ -100,8 +106,9 @@ object SshConnector {
         port: Int,
         username: String,
         oneTimePassword: String,
-        connectTimeoutMs: Int = 10_000,
+        timeoutSec: Int = 12,
     ): ActiveSshShell {
+        val timeoutMs = timeoutSec.coerceIn(3, 60) * 1000
         val jsch = JSch()
         val session = jsch.getSession(username, host, port).apply {
             setPassword(oneTimePassword)
@@ -110,13 +117,13 @@ object SshConnector {
                 put("PreferredAuthentications", "password,keyboard-interactive")
             }
             setConfig(props)
-            timeout = connectTimeoutMs
-            connect(connectTimeoutMs)
+            timeout = timeoutMs
+            connect(timeoutMs)
         }
         val channel = (session.openChannel("shell") as ChannelShell).apply {
             setPty(true)
             setPtyType("xterm-256color")
-            connect(connectTimeoutMs)
+            connect(timeoutMs)
         }
         return ActiveSshShell(
             session = session,

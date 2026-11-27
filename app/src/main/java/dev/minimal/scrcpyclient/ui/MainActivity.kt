@@ -289,10 +289,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun editSshProfile(existing: SshHostProfile?) {
-        val labelField = field("Label (e.g. NAS SSH)", existing?.label ?: "")
-        val hostField = field("Host / IP", existing?.host ?: "")
+        val labelField = field("Display name (e.g. NAS SSH)", existing?.label ?: "")
+        val hostField = field("Host or IP", existing?.host ?: "")
         val portField = field("Port (default 22)", (existing?.port ?: 22).toString(), numeric = true)
         val userField = field("Username", existing?.username ?: "")
+        val timeoutField = field("Connection timeout (sec)", (existing?.timeoutSec ?: 12).toString(), numeric = true)
+        val askPwBox = CheckBox(this).apply {
+            text = "Ask for password when logging in (never saved)"
+            isChecked = true
+        }
+        val tmuxBox = CheckBox(this).apply {
+            text = "Start tmux session on connect"
+            isChecked = existing?.startTmux ?: false
+        }
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -301,11 +310,14 @@ class MainActivity : AppCompatActivity() {
             addView(hostField)
             addView(portField)
             addView(userField)
+            addView(timeoutField)
+            addView(askPwBox)
+            addView(tmuxBox)
         }
 
         val builder = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "Add SSH Host (askpw)" else "Edit SSH Host (askpw)")
-            .setMessage("Passwords are never saved; you will be prompted on every login.")
+            .setTitle(if (existing == null) "New SSH Machine" else "Edit SSH Machine")
+            .setMessage("Passwords are never saved; you type it each time you connect.")
             .setView(box)
             .setPositiveButton("Save") { _, _ ->
                 val hostVal = hostField.text.toString().trim()
@@ -313,6 +325,7 @@ class MainActivity : AppCompatActivity() {
                 if (hostVal.isEmpty() || userVal.isEmpty()) return@setPositiveButton
                 val lbl = labelField.text.toString().trim().ifEmpty { "$userVal@$hostVal" }
                 val prt = portField.text.toString().toIntOrNull() ?: 22
+                val tSec = timeoutField.text.toString().toIntOrNull() ?: 12
                 sshStore.upsert(
                     SshHostProfile(
                         id = existing?.id ?: sshStore.newId(),
@@ -321,6 +334,8 @@ class MainActivity : AppCompatActivity() {
                         port = prt,
                         username = userVal,
                         askPasswordEveryLogin = true,
+                        timeoutSec = tSec,
+                        startTmux = tmuxBox.isChecked,
                     )
                 )
                 renderSshList()
@@ -342,6 +357,8 @@ class MainActivity : AppCompatActivity() {
             putExtra(SshTerminalActivity.EXTRA_HOST, profile.host)
             putExtra(SshTerminalActivity.EXTRA_PORT, profile.port)
             putExtra(SshTerminalActivity.EXTRA_USER, profile.username)
+            putExtra(SshTerminalActivity.EXTRA_TIMEOUT_SEC, profile.timeoutSec)
+            putExtra(SshTerminalActivity.EXTRA_START_TMUX, profile.startTmux)
         }
         startActivity(intent)
     }
