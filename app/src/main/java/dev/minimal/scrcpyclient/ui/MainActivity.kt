@@ -133,7 +133,7 @@ class MainActivity : AppCompatActivity() {
         val adbHubCard = buildAdbHubCard(dp)
 
         val footer = TextView(this).apply {
-            text = "Nexus Hub • phyluke"
+            text = "Nexus Hub â€¢ phyluke"
             textSize = 12f
             typeface = Typeface.MONOSPACE
             setTextColor(textMuted)
@@ -151,7 +151,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(textPrimary)
             })
             addView(TextView(context).apply {
-                text = "scrcpy • ADB • Terminal Hub"
+                text = "scrcpy â€¢ ADB â€¢ Terminal Hub"
                 textSize = 13f
                 setTextColor(textSecondary)
                 setPadding(0, px(2), 0, px(16))
@@ -219,6 +219,12 @@ class MainActivity : AppCompatActivity() {
                 addView(pillButton("Run Shell", accentBlue, Color.WHITE, fill = true) {
                     val c = cmdInput.text.toString().trim()
                     if (c.isNotEmpty()) runShellOnTarget(c)
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        .apply { marginEnd = px(6) }
+                })
+                addView(pillButton("Enter Shell", accentGreen, Color.WHITE, fill = true) {
+                    openFullShell()
                 }.apply {
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                         .apply { marginEnd = px(6) }
@@ -320,6 +326,18 @@ class MainActivity : AppCompatActivity() {
             logCard.visibility = View.VISIBLE
             logView.append(line + "\n")
         }
+    }
+
+    private fun openFullShell() {
+        val p = selectedProfile ?: store.profiles().firstOrNull()
+        val intent = Intent(this, AdbShellActivity::class.java).apply {
+            if (p != null) {
+                putExtra(AdbShellActivity.EXTRA_HOST, p.host)
+                putExtra(AdbShellActivity.EXTRA_PORT, p.port)
+                putExtra(AdbShellActivity.EXTRA_LABEL, p.label)
+            }
+        }
+        startActivity(intent)
     }
 
     private fun runShellOnTarget(command: String) {
