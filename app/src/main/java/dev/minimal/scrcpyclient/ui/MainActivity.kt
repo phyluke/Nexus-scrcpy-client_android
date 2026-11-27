@@ -1,5 +1,6 @@
 package dev.minimal.scrcpyclient.ui
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -21,9 +22,6 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
-import dev.minimal.scrcpyclient.adb.AdbKeyStore
-import dev.minimal.scrcpyclient.adb.AdbToolkit
-import dev.minimal.scrcpyclient.adb.ScrcpyDiagnostic
 import dev.minimal.scrcpyclient.data.AppStore
 import dev.minimal.scrcpyclient.data.Profile
 import dev.minimal.scrcpyclient.data.StreamSettings
@@ -31,29 +29,34 @@ import dev.minimal.scrcpyclient.data.Units
 import dev.minimal.scrcpyclient.ssh.SshAuthMode
 import dev.minimal.scrcpyclient.ssh.SshHostProfile
 import dev.minimal.scrcpyclient.ssh.SshProfileStore
-import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
 
-/** Nexus hub matching Conduit SSH workspace structure alongside scrcpy and ADB tools. */
+/** Stage 1 Nexus main screen: Header + (...), 2 summary tiles, Terminal card, SSH card, ADB/scrcpy tiles, footer. */
 class MainActivity : AppCompatActivity() {
+
+    private data class LocalTermProfile(
+        val id: String,
+        val label: String,
+        val shellCmd: String,
+    )
 
     private lateinit var store: AppStore
     private lateinit var sshStore: SshProfileStore
-    private lateinit var keys: AdbKeyStore
-    private lateinit var list: LinearLayout
-    private lateinit var sshList: LinearLayout
-    private lateinit var sshSearchInput: EditText
+
     private lateinit var savedCountView: TextView
-    private lateinit var adbCountView: TextView
-    private lateinit var logCard: LinearLayout
-    private lateinit var logView: TextView
-    private lateinit var cmdInput: EditText
-    private lateinit var targetSummary: TextView
-    private var selectedProfile: Profile? = null
+    private lateinit var liveAdbCountView: TextView
+
+    private lateinit var termSearchInput: EditText
+    private lateinit var termList: LinearLayout
+    private var termFilterQuery: String = ""
+
+    private lateinit var sshSearchInput: EditText
+    private lateinit var sshList: LinearLayout
     private var sshFilterQuery: String = ""
-    @Volatile private var busy = false
 
     private val bgPage = Color.parseColor("#0D1117")
     private val bgCard = Color.parseColor("#161B22")
@@ -76,22 +79,43 @@ class MainActivity : AppCompatActivity() {
 
         store = AppStore(this)
         sshStore = SshProfileStore(this)
-        keys = AdbKeyStore(this).also { it.ensureKey() }
-        selectedProfile = store.profiles().firstOrNull()
 
         val dp = resources.displayMetrics.density
         fun px(v: Int) = (v * dp).toInt()
 
-        list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        sshList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // 1. Top Header: Nexus (top-left) + (...) menu (top-right: Add Device, Settings)
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(context).apply {
+                    text = "Nexus"
+                    textSize = 26f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                })
+                addView(TextView(context).apply {
+                    text = "SSH workspaces - Terminal - ADB - scrcpy"
+                    textSize = 13f
+                    setTextColor(textSecondary)
+                    setPadding(0, px(2), 0, 0)
+                })
+            })
+            addView(pillButton("...", btnNeutral, textPrimary) {
+                showTopOverflowMenu()
+            })
+        }
 
+        // 2. Two tiles side by side: Saved machines | Live / ADB
         savedCountView = TextView(this).apply {
             text = "0"
             textSize = 20f
             setTypeface(null, Typeface.BOLD)
             setTextColor(textPrimary)
         }
-        adbCountView = TextView(this).apply {
+        liveAdbCountView = TextView(this).apply {
             text = "0"
             textSize = 20f
             setTypeface(null, Typeface.BOLD)
@@ -103,7 +127,7 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = px(12) }
+            ).apply { topMargin = px(14) }
 
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -125,80 +149,23 @@ class MainActivity : AppCompatActivity() {
                 setPadding(px(14), px(10), px(14), px(10))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 addView(TextView(context).apply {
-                    text = "ADB / scrcpy targets"
+                    text = "Live / ADB"
                     textSize = 11f
                     setTextColor(textSecondary)
                 })
-                addView(adbCountView)
+                addView(liveAdbCountView)
             })
         }
 
-        logView = TextView(this).apply {
-            typeface = Typeface.MONOSPACE
-            textSize = 11f
-            setTextColor(textSecondary)
-            setTextIsSelectable(true)
-        }
+        // 3. Terminal (local & Distro) card (replaces Machines card)
+        termList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val terminalCard = buildTerminalCard(dp)
 
-        logCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            background = cardDrawable(bgCard, borderCard, 14)
-            setPadding(px(14), px(12), px(14), px(12))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
+        // 4. SSH machines card (replaces scrcpy card)
+        sshList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val sshMachinesCard = buildSshMachinesCard(dp)
 
-            val header = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(TextView(context).apply {
-                    text = "ADB / Diagnostics Output"
-                    textSize = 13f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(textPrimary)
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                addView(pillButton("Clear", btnNeutral, textSecondary) {
-                    logView.text = ""
-                    logCard.visibility = View.GONE
-                })
-            }
-            addView(header)
-            addView(logView.apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(8) }
-            })
-        }
-
-        val actionBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(12) }
-
-            addView(pillButton("+ Add Device", accentGreen, Color.WHITE, fill = true) { editProfile(null) }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    .apply { marginEnd = px(8) }
-            })
-            addView(pillButton("Settings", btnNeutral, textPrimary, fill = true) { editSettings() }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    .apply { marginEnd = px(8) }
-            })
-            addView(pillButton("ADB Keys", btnNeutral, textPrimary, fill = true) {
-                startActivity(Intent(context, KeysActivity::class.java))
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            })
-        }
-
-        val conduitCard = buildConduitCard(dp)
-        val adbHubCard = buildAdbHubCard(dp)
-
+        // 5. Two tiles side by side: ADB | scrcpy
         val modeTilesRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -219,7 +186,7 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(textPrimary)
                 })
                 addView(TextView(context).apply {
-                    text = "Hosts & shell"
+                    text = "Saved hosts & shell"
                     textSize = 12f
                     setTextColor(textSecondary)
                     setPadding(0, px(2), 0, 0)
@@ -241,7 +208,7 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(textPrimary)
                 })
                 addView(TextView(context).apply {
-                    text = "Mirror sessions"
+                    text = "Live mirror & stream"
                     textSize = 12f
                     setTextColor(textSecondary)
                     setPadding(0, px(2), 0, 0)
@@ -252,8 +219,9 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        // 6. Bottom middle footer: powered by phyluke
         val footer = TextView(this).apply {
-            text = "power by phyluke"
+            text = "powered by phyluke"
             textSize = 12f
             typeface = Typeface.MONOSPACE
             setTextColor(textMuted)
@@ -264,30 +232,11 @@ class MainActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(px(18), px(40), px(18), px(16))
-            addView(TextView(context).apply {
-                text = "Nexus"
-                textSize = 26f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(textPrimary)
-            })
-            addView(TextView(context).apply {
-                text = "SSH workspaces - ADB - scrcpy"
-                textSize = 13f
-                setTextColor(textSecondary)
-                setPadding(0, px(2), 0, px(14))
-            })
+            addView(headerRow)
             addView(statsRow)
-            addView(conduitCard)
-            addView(list.apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(14) }
-            })
-            addView(actionBar)
-            addView(adbHubCard)
+            addView(terminalCard)
+            addView(sshMachinesCard)
             addView(modeTilesRow)
-            addView(logCard)
             addView(footer)
         }
 
@@ -296,48 +245,225 @@ class MainActivity : AppCompatActivity() {
             isFillViewport = true
             addView(root)
         })
-        renderList()
+
+        renderTerminalList()
         renderSshList()
     }
 
     override fun onResume() {
         super.onResume()
+        if (::termList.isInitialized) renderTerminalList()
         if (::sshList.isInitialized) renderSshList()
-        if (::list.isInitialized) renderList()
     }
 
     private fun refreshStats() {
-        savedCountView.text = sshStore.profiles().size.toString()
-        adbCountView.text = store.profiles().size.toString()
+        savedCountView.text = (sshStore.profiles().size + loadLocalTerminals().size).toString()
+        liveAdbCountView.text = store.profiles().size.toString()
     }
 
-    private fun buildConduitCard(dp: Float): LinearLayout {
+    private fun showTopOverflowMenu() {
+        val options = arrayOf("Add Device", "Settings")
+        AlertDialog.Builder(this)
+            .setTitle("Nexus")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> addAdbDeviceDialog()
+                    1 -> editStreamSettingsDialog()
+                }
+            }
+            .show()
+    }
+
+    private fun buildTerminalCard(dp: Float): LinearLayout {
         fun px(v: Int) = (v * dp).toInt()
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = cardDrawable(bgCard, borderCard, 14)
             setPadding(px(14), px(14), px(14), px(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = px(14) }
 
             val topRow = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(context).apply {
+                    text = "Terminal (local & Distro)"
+                    textSize = 16f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(pillButton("+ New", accentBlue, Color.WHITE, fill = true) {
+                    editLocalTerminalDialog(null)
+                })
+            }
+            addView(topRow)
+
+            termSearchInput = EditText(context).apply {
+                hint = "Search / Local / Distro"
+                setHintTextColor(textMuted)
+                setTextColor(textPrimary)
+                textSize = 12f
+                background = cardDrawable(bgInput, borderCard, 10)
+                setPadding(px(12), px(9), px(12), px(9))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = px(10) }
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                        termFilterQuery = s?.toString()?.trim().orEmpty()
+                        renderTerminalList()
+                    }
+                    override fun afterTextChanged(s: Editable?) {}
+                })
+            }
+            addView(termSearchInput)
+
+            addView(termList.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = px(10) }
+            })
+        }
+    }
+
+    private fun renderTerminalList() {
+        val dp = resources.displayMetrics.density
+        fun px(v: Int) = (v * dp).toInt()
+        termList.removeAllViews()
+        refreshStats()
+
+        val q = termFilterQuery.lowercase()
+        val all = loadLocalTerminals()
+        val filtered = if (q.isEmpty()) all else all.filter {
+            it.label.lowercase().contains(q) || it.shellCmd.lowercase().contains(q)
+        }
+
+        for (t in filtered) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = cardDrawable(bgInput, borderCard, 12)
+                setPadding(px(12), px(10), px(12), px(10))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = px(8) }
+
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     addView(TextView(context).apply {
-                        text = "Machines"
-                        textSize = 16f
+                        text = t.label
+                        textSize = 15f
                         setTypeface(null, Typeface.BOLD)
                         setTextColor(textPrimary)
                     })
                     addView(TextView(context).apply {
-                        text = "SSH & terminal hosts - askpw per login"
-                        textSize = 12f
+                        text = t.shellCmd
+                        textSize = 11f
+                        typeface = Typeface.MONOSPACE
                         setTextColor(textSecondary)
-                        setPadding(0, px(2), 0, 0)
                     })
                 })
-                addView(pillButton("+ New machine", accentPink, Color.WHITE, fill = true) {
+                addView(pillButton("Open", accentGreen, Color.WHITE, fill = true) {
+                    startActivity(
+                        Intent(context, AdbShellActivity::class.java)
+                            .putExtra(AdbShellActivity.EXTRA_LABEL, t.label)
+                    )
+                })
+            }
+            termList.addView(row)
+        }
+    }
+
+    private fun loadLocalTerminals(): List<LocalTermProfile> {
+        val prefs = getSharedPreferences("nexus_local_terminals", Context.MODE_PRIVATE)
+        val raw = prefs.getString("items", null)
+        val defaults = listOf(
+            LocalTermProfile("local_sh", "Android Local Shell", "/system/bin/sh"),
+        )
+        if (raw.isNullOrEmpty()) return defaults
+        val arr = JSONArray(raw)
+        val custom = (0 until arr.length()).map { idx ->
+            val o = arr.getJSONObject(idx)
+            LocalTermProfile(
+                id = o.getString("id"),
+                label = o.getString("label"),
+                shellCmd = o.getString("shellCmd"),
+            )
+        }
+        return defaults + custom
+    }
+
+    private fun saveCustomLocalTerminals(items: List<LocalTermProfile>) {
+        val arr = JSONArray()
+        items.filterNot { it.id == "local_sh" }.forEach { t ->
+            arr.put(
+                JSONObject()
+                    .put("id", t.id)
+                    .put("label", t.label)
+                    .put("shellCmd", t.shellCmd)
+            )
+        }
+        getSharedPreferences("nexus_local_terminals", Context.MODE_PRIVATE)
+            .edit()
+            .putString("items", arr.toString())
+            .apply()
+    }
+
+    private fun editLocalTerminalDialog(existing: LocalTermProfile?) {
+        val labelField = field("Name (e.g. Ubuntu / Alpine / Local)", existing?.label ?: "")
+        val cmdField = field("Shell / Distro command", existing?.shellCmd ?: "/system/bin/sh")
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 20, 48, 8)
+            addView(labelField)
+            addView(cmdField)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("New Terminal Profile")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val lbl = labelField.text.toString().trim()
+                val cmd = cmdField.text.toString().trim().ifEmpty { "/system/bin/sh" }
+                if (lbl.isEmpty()) return@setPositiveButton
+                val updated = loadLocalTerminals().filterNot { it.id == existing?.id } +
+                    LocalTermProfile(existing?.id ?: UUID.randomUUID().toString(), lbl, cmd)
+                saveCustomLocalTerminals(updated)
+                renderTerminalList()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun buildSshMachinesCard(dp: Float): LinearLayout {
+        fun px(v: Int) = (v * dp).toInt()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardDrawable(bgCard, borderCard, 14)
+            setPadding(px(14), px(14), px(14), px(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = px(14) }
+
+            val topRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(context).apply {
+                    text = "SSH machines"
+                    textSize = 16f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(pillButton("+ New", accentPink, Color.WHITE, fill = true) {
                     editSshProfile(null)
                 })
             }
@@ -392,7 +518,7 @@ class MainActivity : AppCompatActivity() {
         if (hosts.isEmpty()) {
             sshList.addView(TextView(this).apply {
                 text = if (allHosts.isEmpty()) {
-                    "No machines saved yet. Tap + New machine to add one."
+                    "No SSH machines saved yet. Tap + New to add one."
                 } else {
                     "No matching machines for \"$sshFilterQuery\"."
                 }
@@ -452,7 +578,7 @@ class MainActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(0, px(8), 0, 0)
                 }
-                val authText = if (h.authMode == SshAuthMode.PASSWORD) "${h.authMode.label} (askpw)" else h.authMode.label
+                val authText = if (h.authMode == SshAuthMode.PASSWORD) "askpw" else h.authMode.label
                 metaRow.addView(badgePill(authText, btnNeutral, textSecondary).apply {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -461,14 +587,6 @@ class MainActivity : AppCompatActivity() {
                 })
                 if (h.startTmux) {
                     metaRow.addView(badgePill("tmux:${h.tmuxPrefix}", btnNeutral, textSecondary).apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.WRAP_CONTENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply { marginEnd = px(6) }
-                    })
-                }
-                if (h.useMosh) {
-                    metaRow.addView(badgePill("mosh:${h.moshLocale}", btnNeutral, textSecondary).apply {
                         layoutParams = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.WRAP_CONTENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -514,24 +632,22 @@ class MainActivity : AppCompatActivity() {
         val portField = field("Port (22)", (existing?.port ?: 22).toString(), numeric = true)
         val userField = field("Username", existing?.username ?: "")
 
-        val authGroup = RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-        }
+        val authGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
         val rbPassword = RadioButton(this).apply {
             id = View.generateViewId()
-            text = "Password - Use account password for SSH login"
+            text = "Password (askpw per login)"
             setTextColor(textPrimary)
             isChecked = (existing?.authMode ?: SshAuthMode.PASSWORD) == SshAuthMode.PASSWORD
         }
         val rbPrivateKey = RadioButton(this).apply {
             id = View.generateViewId()
-            text = "Private key - Use a PEM or OpenSSH private key"
+            text = "Private key (PEM / OpenSSH)"
             setTextColor(textPrimary)
             isChecked = existing?.authMode == SshAuthMode.PRIVATE_KEY
         }
         val rbHardwareKey = RadioButton(this).apply {
             id = View.generateViewId()
-            text = "Hardware key - OpenSSH *_sk stub (USB/NFC)"
+            text = "Hardware key (*_sk stub)"
             setTextColor(textPrimary)
             isChecked = existing?.authMode == SshAuthMode.HARDWARE_KEY
         }
@@ -544,14 +660,9 @@ class MainActivity : AppCompatActivity() {
             setTextColor(textSecondary)
             isChecked = true
         }
-        val keyPathField = field("Private key file path (e.g. /sdcard/id_ed25519)", existing?.privateKeyPath ?: "")
+        val keyPathField = field("Private key file path", existing?.privateKeyPath ?: "")
         val keyStubField = field("OpenSSH *_sk stub path or text", existing?.hardwareKeyStub ?: "")
-        val keyPassField = EditText(this).apply {
-            hint = "Key / stub passphrase (optional)"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-
-        val tagsField = field("Tags (comma separated, e.g. lab, homelab)", existing?.tags?.joinToString(", ") ?: "")
+        val tagsField = field("Tags (comma separated)", existing?.tags?.joinToString(", ") ?: "")
         val timeoutField = field("Connection timeout (sec)", (existing?.timeoutSec ?: 12).toString(), numeric = true)
         val tmuxBox = CheckBox(this).apply {
             text = "Start tmux on connect"
@@ -565,61 +676,29 @@ class MainActivity : AppCompatActivity() {
             isChecked = existing?.useMosh ?: false
         }
         val moshLocaleField = field("Mosh locale (default C.UTF-8)", existing?.moshLocale ?: "C.UTF-8")
-        val predEchoBox = CheckBox(this).apply {
-            text = "Predictive echo (experimental)"
-            setTextColor(textSecondary)
-            isChecked = existing?.predictiveEcho ?: false
-        }
-
-        fun sectionHeader(title: String, subtitle: String) = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 16, 0, 6)
-            addView(TextView(context).apply {
-                text = title
-                textSize = 14f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(textPrimary)
-            })
-            addView(TextView(context).apply {
-                text = subtitle
-                textSize = 11f
-                setTextColor(textSecondary)
-            })
-        }
 
         val inner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 12, 40, 12)
-            addView(sectionHeader("Connection", "Where to reach this machine."))
             addView(labelField)
             addView(hostField)
             addView(portField)
             addView(userField)
-
-            addView(sectionHeader("Authentication", "Credentials are never saved when askpw is active."))
             addView(authGroup)
             addView(askPwBox)
             addView(keyPathField)
             addView(keyStubField)
-            addView(keyPassField)
-
-            addView(sectionHeader("Advanced", "Optional tagging, tmux, and Mosh settings."))
             addView(tagsField)
             addView(timeoutField)
             addView(tmuxBox)
             addView(tmuxPrefixField)
             addView(moshBox)
             addView(moshLocaleField)
-            addView(predEchoBox)
-        }
-
-        val scrollForm = ScrollView(this).apply {
-            addView(inner)
         }
 
         val builder = AlertDialog.Builder(this)
             .setTitle(if (existing == null) "New machine" else "Edit machine")
-            .setView(scrollForm)
+            .setView(ScrollView(this).apply { addView(inner) })
             .setPositiveButton("Save") { _, _ ->
                 val hostVal = hostField.text.toString().trim()
                 val userVal = userField.text.toString().trim()
@@ -656,7 +735,7 @@ class MainActivity : AppCompatActivity() {
                         tmuxPrefix = tPrefix,
                         useMosh = moshBox.isChecked,
                         moshLocale = locale,
-                        predictiveEcho = predEchoBox.isChecked,
+                        predictiveEcho = false,
                         lastUsedAt = existing?.lastUsedAt ?: 0L,
                     )
                 )
@@ -692,345 +771,62 @@ class MainActivity : AppCompatActivity() {
         startActivity(intent)
     }
 
-    private fun buildAdbHubCard(dp: Float): LinearLayout {
-        fun px(v: Int) = (v * dp).toInt()
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(bgCard, borderCard, 14)
-            setPadding(px(14), px(14), px(14), px(14))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
-
-            addView(TextView(context).apply {
-                text = "ADB Command & Wireless Hub"
-                textSize = 15f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(textPrimary)
-            })
-
-            targetSummary = TextView(context).apply {
-                textSize = 12f
-                typeface = Typeface.MONOSPACE
-                setTextColor(textSecondary)
-                setPadding(0, px(2), 0, px(10))
-            }
-            updateTargetSummary()
-            addView(targetSummary)
-
-            cmdInput = EditText(context).apply {
-                hint = "ADB shell cmd (e.g. getprop ro.product.model)"
-                setHintTextColor(textMuted)
-                setTextColor(textPrimary)
-                textSize = 12f
-                typeface = Typeface.MONOSPACE
-                background = cardDrawable(bgInput, borderCard, 8)
-                setPadding(px(10), px(8), px(10), px(8))
-            }
-            addView(cmdInput)
-
-            val runRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(8) }
-
-                addView(pillButton("Run Shell", accentBlue, Color.WHITE, fill = true) {
-                    val c = cmdInput.text.toString().trim()
-                    if (c.isNotEmpty()) runShellOnTarget(c)
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginEnd = px(6) }
-                })
-                addView(pillButton("Enter Shell", accentGreen, Color.WHITE, fill = true) {
-                    openFullShell()
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginEnd = px(6) }
-                })
-                addView(pillButton("Device Info", btnNeutral, textPrimary) {
-                    runDeviceInfoOnTarget()
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginEnd = px(6) }
-                })
-                addView(pillButton("TCP/Pair", btnNeutral, textPrimary) {
-                    showTcpWirelessDialog()
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-            }
-            addView(runRow)
-
-            val fileRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(8) }
-
-                addView(pillButton("Push File", btnNeutral, textSecondary) {
-                    showPushFileDialog(installAfterPush = false)
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginEnd = px(8) }
-                })
-                addView(pillButton("Install APK", btnNeutral, textSecondary) {
-                    showPushFileDialog(installAfterPush = true)
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-            }
-            addView(fileRow)
-
-            val presets = listOf(
-                "Battery" to "dumpsys battery | grep -E 'level|status|temperature'",
-                "WM Size" to "wm size",
-                "IP / Net" to "ip -4 addr show wlan0",
-                "Home Key" to "input keyevent 3",
-                "Power Key" to "input keyevent 26",
-                "3P Apps" to "pm list packages -3",
-            )
-            val chipStrip = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, px(10), 0, 0)
-            }
-            presets.forEachIndexed { idx, (label, shellCmd) ->
-                chipStrip.addView(pillButton(label, btnNeutral, textSecondary) {
-                    cmdInput.setText(shellCmd)
-                    runShellOnTarget(shellCmd)
-                }.apply {
-                    if (idx < presets.lastIndex) {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.WRAP_CONTENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply { marginEnd = px(6) }
-                    }
-                })
-            }
-            addView(HorizontalScrollView(context).apply {
-                isHorizontalScrollBarEnabled = false
-                addView(chipStrip)
-            })
-        }
-    }
-
-    private fun updateTargetSummary() {
-        val p = selectedProfile ?: store.profiles().firstOrNull()
-        selectedProfile = p
-        targetSummary.text = if (p != null) {
-            "Active ADB Target: ${p.label} (${p.host}:${p.port})"
-        } else {
-            "Active ADB Target: None (tap + Add Device or TCP/Pair)"
-        }
-    }
-
-    private fun requireTarget(): Profile? {
-        val p = selectedProfile ?: store.profiles().firstOrNull()
-        selectedProfile = p
-        if (p == null) {
-            openLog("No target device configured. Add a device or use TCP/Pair first.")
-            return null
-        }
-        return p
-    }
-
-    private fun openLog(initial: String) {
-        logCard.visibility = View.VISIBLE
-        logView.text = initial + "\n"
-    }
-
-    private fun appendLog(line: String) {
-        runOnUiThread {
-            logCard.visibility = View.VISIBLE
-            logView.append(line + "\n")
-        }
-    }
-
-    private fun openFullShell() {
-        val p = selectedProfile ?: store.profiles().firstOrNull()
-        val intent = Intent(this, AdbShellActivity::class.java).apply {
-            if (p != null) {
-                putExtra(AdbShellActivity.EXTRA_HOST, p.host)
-                putExtra(AdbShellActivity.EXTRA_PORT, p.port)
-                putExtra(AdbShellActivity.EXTRA_LABEL, p.label)
-            }
-        }
-        startActivity(intent)
-    }
-
-    private fun runShellOnTarget(command: String) {
-        val p = requireTarget() ?: return
-        if (busy) return
-        busy = true
-        openLog("$ ${p.host}:${p.port} > $command")
-        Thread {
-            try {
-                AdbToolkit.runShell(keys, p.host, p.port, command) { line ->
-                    appendLog(line)
-                }
-            } catch (e: Exception) {
-                appendLog("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-            } finally {
-                busy = false
-            }
-        }.start()
-    }
-
-    private fun runDeviceInfoOnTarget() {
-        val p = requireTarget() ?: return
-        if (busy) return
-        busy = true
-        openLog("Collecting device info from ${p.host}:${p.port} ...")
-        Thread {
-            try {
-                AdbToolkit.collectDeviceInfo(keys, p.host, p.port) { line ->
-                    appendLog(line)
-                }
-            } catch (e: Exception) {
-                appendLog("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-            } finally {
-                busy = false
-            }
-        }.start()
-    }
-
-    private fun showTcpWirelessDialog() {
-        val current = selectedProfile ?: store.profiles().firstOrNull()
-        val hostField = field("Target IP / Host", current?.host ?: "")
-        val portField = field("Connect Port (e.g. 5555 or wireless port)", (current?.port ?: 5555).toString(), numeric = true)
-        val tcpipPortField = field("Switch adbd to TCP Port (e.g. 5555)", "5555", numeric = true)
-        val pairPortField = field("Wireless Pair Port (optional)", "", numeric = true)
-        val pairCodeField = field("Wireless Pairing Code (optional)", "")
-
+    private fun addAdbDeviceDialog() {
+        val label = field("Label (e.g. Redmi Note 8 Pro)", "")
+        val host = field("IP address", "")
+        val port = field("Port", "5555", numeric = true)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 20, 48, 8)
-            addView(hostField)
-            addView(portField)
-            addView(tcpipPortField)
-            addView(pairPortField)
-            addView(pairCodeField)
+            addView(label); addView(host); addView(port)
         }
-
         AlertDialog.Builder(this)
-            .setTitle("TCP / Wireless ADB")
+            .setTitle("Add Device")
             .setView(box)
-            .setPositiveButton("Test & Save") { _, _ ->
-                val h = hostField.text.toString().trim()
-                val p = portField.text.toString().toIntOrNull() ?: 5555
+            .setPositiveButton("Save") { _, _ ->
+                val h = host.text.toString().trim()
                 if (h.isEmpty()) return@setPositiveButton
-                val profile = Profile(
-                    current?.id ?: UUID.randomUUID().toString(),
-                    current?.label ?: h,
+                val updated = Profile(
+                    UUID.randomUUID().toString(),
+                    label.text.toString().trim().ifEmpty { h },
                     h,
-                    p,
+                    port.text.toString().toIntOrNull() ?: 5555,
                 )
-                selectedProfile = profile
-                updateTargetSummary()
-                if (busy) return@setPositiveButton
-                busy = true
-                openLog("Testing TCP reachability to $h:$p ...")
-                Thread {
-                    try {
-                        val reachable = AdbToolkit.testTcpPort(h, p)
-                        appendLog("TCP $h:$p reachable = $reachable")
-                        if (reachable) {
-                            AdbToolkit.withConnection(keys, h, p, ::appendLog) {
-                                appendLog("ADB handshake OK on $h:$p")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        appendLog("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-                    } finally {
-                        busy = false
-                    }
-                }.start()
+                val all = store.profiles() + updated
+                store.saveProfiles(all.sortedBy { it.label.lowercase() })
+                refreshStats()
             }
-            .setNeutralButton("Switch TCP Port") { _, _ ->
-                val h = hostField.text.toString().trim()
-                val curPort = portField.text.toString().toIntOrNull() ?: 5555
-                val targetTcp = tcpipPortField.text.toString().toIntOrNull() ?: 5555
-                if (h.isEmpty() || busy) return@setNeutralButton
-                busy = true
-                openLog("Switching $h:$curPort adbd to TCP port $targetTcp ...")
-                Thread {
-                    try {
-                        AdbToolkit.switchToTcpip(keys, h, curPort, targetTcp, ::appendLog)
-                    } catch (e: Exception) {
-                        appendLog("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-                    } finally {
-                        busy = false
-                    }
-                }.start()
-            }
-            .setNegativeButton("Pair") { _, _ ->
-                val h = hostField.text.toString().trim()
-                val pairPort = pairPortField.text.toString().toIntOrNull() ?: 0
-                val code = pairCodeField.text.toString().trim()
-                if (h.isEmpty() || pairPort <= 0 || code.isEmpty() || busy) return@setNegativeButton
-                busy = true
-                openLog("Attempting wireless pairing at $h:$pairPort ...")
-                Thread {
-                    try {
-                        AdbToolkit.pairWireless(keys, h, pairPort, code, ::appendLog)
-                    } catch (e: Exception) {
-                        appendLog("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-                    } finally {
-                        busy = false
-                    }
-                }.start()
-            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun showPushFileDialog(installAfterPush: Boolean) {
-        val p = requireTarget() ?: return
-        val localPathField = field(
-            if (installAfterPush) "Local APK path (e.g. /sdcard/Download/app.apk)" else "Local file path (e.g. /sdcard/Download/file.txt)",
-            ""
-        )
-        val remotePathField = field(
-            "Remote path on target",
-            if (installAfterPush) "/data/local/tmp/nexus_install_tmp.apk" else "/sdcard/Download/"
-        )
+    private fun editStreamSettingsDialog() {
+        val s = store.settings()
+        val maxSize = field("Max size (720, 1024, 0 = native)", s.maxSize.toString(), numeric = true)
+        val bitrate = field("Bitrate (2M, 4M, 8M)", Units.formatBitRate(s.bitRate))
+        val fps = field("Max FPS", s.maxFps.toString(), numeric = true)
+        val off = CheckBox(this).apply {
+            text = "Turn target screen off automatically on connect"
+            isChecked = s.screenOff
+        }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 20, 48, 8)
-            addView(localPathField)
-            if (!installAfterPush) addView(remotePathField)
+            addView(maxSize); addView(bitrate); addView(fps); addView(off)
         }
         AlertDialog.Builder(this)
-            .setTitle(if (installAfterPush) "Install APK Over ADB" else "Push File Over ADB Sync")
+            .setTitle("Settings")
             .setView(box)
-            .setPositiveButton(if (installAfterPush) "Install" else "Push") { _, _ ->
-                val localPath = localPathField.text.toString().trim()
-                if (localPath.isEmpty() || busy) return@setPositiveButton
-                val file = File(localPath)
-                if (!file.exists() || !file.isFile) {
-                    openLog("Local file not found: $localPath")
-                    return@setPositiveButton
-                }
-                val rawRemote = remotePathField.text.toString().trim()
-                val finalRemote = if (rawRemote.endsWith("/")) rawRemote + file.name else rawRemote
-                busy = true
-                openLog("Preparing transfer from ${file.absolutePath} ...")
-                Thread {
-                    try {
-                        val bytes = file.readBytes()
-                        if (installAfterPush) {
-                            AdbToolkit.installApk(keys, p.host, p.port, bytes, ::appendLog)
-                        } else {
-                            AdbToolkit.pushBytes(keys, p.host, p.port, bytes, finalRemote, 33188, ::appendLog)
-                        }
-                    } catch (e: Exception) {
-                        appendLog("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-                    } finally {
-                        busy = false
-                    }
-                }.start()
+            .setPositiveButton("Save") { _, _ ->
+                store.saveSettings(
+                    StreamSettings(
+                        maxSize = maxSize.text.toString().toIntOrNull() ?: s.maxSize,
+                        bitRate = Units.parseBitRate(bitrate.text.toString()) ?: s.bitRate,
+                        maxFps = fps.text.toString().toIntOrNull() ?: s.maxFps,
+                        navBar = false,
+                        screenOff = off.isChecked,
+                    )
+                )
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1067,182 +863,6 @@ class MainActivity : AppCompatActivity() {
         setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
         background = cardDrawable(bg, if (fill && bg == accentGreen) Color.parseColor("#2EA043") else borderCard, 10)
         setOnClickListener { onClick() }
-    }
-
-    private fun renderList() {
-        val dp = resources.displayMetrics.density
-        fun px(v: Int) = (v * dp).toInt()
-        list.removeAllViews()
-        refreshStats()
-
-        val profiles = store.profiles()
-        if (profiles.isEmpty()) {
-            list.addView(TextView(this).apply {
-                text = "No devices configured yet. Tap + Add Device to begin."
-                textSize = 13f
-                setTextColor(textSecondary)
-                background = cardDrawable(bgCard, borderCard, 14)
-                setPadding(px(16), px(20), px(16), px(20))
-            })
-            updateTargetSummary()
-            return
-        }
-
-        for (p in profiles) {
-            val isSelected = selectedProfile?.id == p.id
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgCard, if (isSelected) accentBlue else borderCard, 14)
-                setPadding(px(16), px(14), px(16), px(14))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = px(12) }
-
-                val infoRow = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        addView(TextView(context).apply {
-                            text = if (isSelected) "${p.label}  [ADB]" else p.label
-                            textSize = 17f
-                            setTypeface(null, Typeface.BOLD)
-                            setTextColor(textPrimary)
-                        })
-                        addView(TextView(context).apply {
-                            text = "${p.host}:${p.port}"
-                            textSize = 12f
-                            typeface = Typeface.MONOSPACE
-                            setTextColor(textSecondary)
-                            setPadding(0, px(2), 0, 0)
-                        })
-                    })
-                    addView(pillButton("Connect", accentGreen, Color.WHITE) {
-                        selectedProfile = p
-                        updateTargetSummary()
-                        openStream(p)
-                    })
-                }
-
-                val subActions = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { topMargin = px(12) }
-                    addView(pillButton("Select ADB", if (isSelected) accentBlue else btnNeutral, if (isSelected) Color.WHITE else textSecondary) {
-                        selectedProfile = p
-                        updateTargetSummary()
-                        renderList()
-                    }.apply {
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                            .apply { marginEnd = px(6) }
-                    })
-                    addView(pillButton("Test Link", btnNeutral, textSecondary) { connect(p) }.apply {
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                            .apply { marginEnd = px(6) }
-                    })
-                    addView(pillButton("Edit", btnNeutral, textSecondary) { editProfile(p) }.apply {
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    })
-                }
-
-                addView(infoRow)
-                addView(subActions)
-            }
-            list.addView(card)
-        }
-        updateTargetSummary()
-    }
-
-    private fun openStream(p: Profile) {
-        startActivity(Intent(this, StreamActivity::class.java).putExtra("profileId", p.id))
-    }
-
-    private fun connect(p: Profile) {
-        if (busy) return
-        busy = true
-        openLog("Running diagnostic on ${p.host}:${p.port}...")
-        val settings = store.settings()
-        Thread {
-            try {
-                ScrcpyDiagnostic(applicationContext, keys).run(p, settings) { line ->
-                    appendLog(line)
-                }
-            } finally {
-                busy = false
-            }
-        }.start()
-    }
-
-    private fun editProfile(existing: Profile?) {
-        val label = field("Label (e.g. Redmi Note 8 Pro)", existing?.label ?: "")
-        val host = field("IP address", existing?.host ?: "")
-        val port = field("Port", (existing?.port ?: 5555).toString(), numeric = true)
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 20, 48, 8)
-            addView(label); addView(host); addView(port)
-        }
-        val b = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "Add Device" else "Edit Device")
-            .setView(box)
-            .setPositiveButton("Save") { _, _ ->
-                val h = host.text.toString().trim()
-                if (h.isEmpty()) return@setPositiveButton
-                val updated = Profile(
-                    existing?.id ?: UUID.randomUUID().toString(),
-                    label.text.toString().trim().ifEmpty { h },
-                    h,
-                    port.text.toString().toIntOrNull() ?: 5555,
-                )
-                val all = store.profiles().filter { it.id != updated.id } + updated
-                store.saveProfiles(all.sortedBy { it.label.lowercase() })
-                selectedProfile = updated
-                renderList()
-            }
-            .setNegativeButton("Cancel", null)
-        if (existing != null) b.setNeutralButton("Delete") { _, _ ->
-            val remaining = store.profiles().filter { it.id != existing.id }
-            store.saveProfiles(remaining)
-            if (selectedProfile?.id == existing.id) selectedProfile = remaining.firstOrNull()
-            renderList()
-        }
-        b.show()
-    }
-
-    private fun editSettings() {
-        val s = store.settings()
-        val maxSize = field("Max size (720, 1024, 0 = native)", s.maxSize.toString(), numeric = true)
-        val bitrate = field("Bitrate (2M, 4M, 8M)", Units.formatBitRate(s.bitRate))
-        val fps = field("Max FPS", s.maxFps.toString(), numeric = true)
-        val off = CheckBox(this).apply {
-            text = "Turn target screen off automatically on connect"
-            isChecked = s.screenOff
-        }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 20, 48, 8)
-            addView(maxSize); addView(bitrate); addView(fps); addView(off)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Stream Settings")
-            .setView(box)
-            .setPositiveButton("Save") { _, _ ->
-                store.saveSettings(
-                    StreamSettings(
-                        maxSize = maxSize.text.toString().toIntOrNull() ?: s.maxSize,
-                        bitRate = Units.parseBitRate(bitrate.text.toString()) ?: s.bitRate,
-                        maxFps = fps.text.toString().toIntOrNull() ?: s.maxFps,
-                        navBar = false,
-                        screenOff = off.isChecked,
-                    )
-                )
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
     private fun field(hint: String, value: String, numeric: Boolean = false) = EditText(this).apply {
