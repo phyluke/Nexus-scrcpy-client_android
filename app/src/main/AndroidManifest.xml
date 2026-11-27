@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -20,33 +20,14 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".ui.MainActivity"
-            android:exported="true" />
-
-        <activity
-            android:name=".ui.KeysActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".ui.StreamActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".ui.AdbShellActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".ui.AdbFullScreenActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".ui.ScrcpyFullScreenActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".ui.SshTerminalActivity"
-            android:exported="false" />
+        <activity android:name=".ui.MainActivity" android:exported="true" />
+        <activity android:name=".ui.KeysActivity" android:exported="false" />
+        <activity android:name=".ui.StreamActivity" android:exported="false" />
+        
+        <activity android:name=".ui.AdbFullScreenActivity" android:exported="false" />
+        <activity android:name=".ui.AdbShellActivity" android:exported="false" />
+        <activity android:name=".ui.ScrcpyFullScreenActivity" android:exported="false" />
+        <activity android:name=".ui.SshTerminalActivity" android:exported="false" />
 
     </application>
 </manifest>
