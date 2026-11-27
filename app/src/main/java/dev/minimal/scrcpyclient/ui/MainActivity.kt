@@ -1,4 +1,4 @@
-package dev.minimal.scrcpyclient.ui
+﻿package dev.minimal.scrcpyclient.ui
 
 import android.content.Context
 import android.content.Intent
@@ -14,6 +14,7 @@ import android.view.View
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -22,6 +23,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
+import dev.minimal.scrcpyclient.adb.AdbKeyStore
 import dev.minimal.scrcpyclient.data.AppStore
 import dev.minimal.scrcpyclient.data.Profile
 import dev.minimal.scrcpyclient.data.StreamSettings
@@ -35,39 +37,30 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
 
-/** Stage 1 Nexus main screen: Header + (...), 2 summary tiles, Terminal card, SSH card, ADB/scrcpy tiles, footer. */
+/** Conduit-style Nexus main hub: unified machine list, stat cards, resume sessions, overflow menus. */
 class MainActivity : AppCompatActivity() {
 
-    private data class LocalTermProfile(
-        val id: String,
-        val label: String,
-        val shellCmd: String,
-    )
+    private data class LocalTermProfile(val id: String, val label: String, val shellCmd: String)
 
     private lateinit var store: AppStore
     private lateinit var sshStore: SshProfileStore
 
     private lateinit var savedCountView: TextView
-    private lateinit var liveAdbCountView: TextView
+    private lateinit var liveCountView: TextView
 
-    private lateinit var termSearchInput: EditText
-    private lateinit var termList: LinearLayout
-    private var termFilterQuery: String = ""
+    private lateinit var machineSearchInput: EditText
+    private lateinit var machineList: LinearLayout
+    private var machineFilterQuery: String = ""
 
-    private lateinit var sshSearchInput: EditText
-    private lateinit var sshList: LinearLayout
-    private var sshFilterQuery: String = ""
-
+    // Colors (function over form — dark base, pink accent)
     private val bgPage = Color.parseColor("#0D1117")
     private val bgCard = Color.parseColor("#161B22")
-    private val bgInput = Color.parseColor("#0D1117")
     private val borderCard = Color.parseColor("#30363D")
+    private val accentPink = Color.parseColor("#DB61A2")
+    private val accentBlue = Color.parseColor("#1F6FEB")
     private val textPrimary = Color.parseColor("#F0F6FC")
     private val textSecondary = Color.parseColor("#8B949E")
     private val textMuted = Color.parseColor("#484F58")
-    private val accentGreen = Color.parseColor("#238636")
-    private val accentBlue = Color.parseColor("#1F6FEB")
-    private val accentPink = Color.parseColor("#DB61A2")
     private val btnNeutral = Color.parseColor("#21262D")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,21 +76,25 @@ class MainActivity : AppCompatActivity() {
         val dp = resources.displayMetrics.density
         fun px(v: Int) = (v * dp).toInt()
 
-        // 1. Top Header: Nexus (top-left) + (...) menu (top-right: Add Device, Settings)
+        // ---- Top Header ----
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 addView(TextView(context).apply {
                     text = "Nexus"
-                    textSize = 26f
+                    textSize = 28f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(textPrimary)
                 })
                 addView(TextView(context).apply {
-                    text = "SSH workspaces - Terminal - ADB - scrcpy"
+                    text = "SSH workspaces · Terminal · ADB · scrcpy"
                     textSize = 13f
                     setTextColor(textSecondary)
                     setPadding(0, px(2), 0, 0)
@@ -105,19 +102,24 @@ class MainActivity : AppCompatActivity() {
             })
             addView(pillButton("...", btnNeutral, textPrimary) {
                 showTopOverflowMenu()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
             })
         }
 
-        // 2. Two tiles side by side: Saved machines | Live / ADB
+        // ---- Stat cards ----
         savedCountView = TextView(this).apply {
             text = "0"
-            textSize = 20f
+            textSize = 24f
             setTypeface(null, Typeface.BOLD)
             setTextColor(textPrimary)
         }
-        liveAdbCountView = TextView(this).apply {
+        liveCountView = TextView(this).apply {
             text = "0"
-            textSize = 20f
+            textSize = 24f
             setTypeface(null, Typeface.BOLD)
             setTextColor(textPrimary)
         }
@@ -127,99 +129,59 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
-
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgCard, borderCard, 12)
-                setPadding(px(14), px(10), px(14), px(10))
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    .apply { marginEnd = px(8) }
-                addView(TextView(context).apply {
-                    text = "Saved machines"
-                    textSize = 11f
-                    setTextColor(textSecondary)
-                })
-                addView(savedCountView)
-            })
-
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgCard, borderCard, 12)
-                setPadding(px(14), px(10), px(14), px(10))
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                addView(TextView(context).apply {
-                    text = "Live / ADB"
-                    textSize = 11f
-                    setTextColor(textSecondary)
-                })
-                addView(liveAdbCountView)
-            })
+            ).apply { topMargin = px(12) }
+            addView(statCard("Saved machines", savedCountView, dp, px))
+            addView(statCard("Live sessions", liveCountView, dp, px))
         }
 
-        // 3. Terminal (local & Distro) card (replaces Machines card)
-        termList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val terminalCard = buildTerminalCard(dp)
+        // ---- Resume sessions card ----
+        val resumeCard = buildResumeCard(dp, px)
 
-        // 4. SSH machines card (replaces scrcpy card)
-        sshList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val sshMachinesCard = buildSshMachinesCard(dp)
-
-        // 5. Two tiles side by side: ADB | scrcpy
-        val modeTilesRow = LinearLayout(this).apply {
+        // ---- Machines section ----
+        val machinesHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
-
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgCard, borderCard, 14)
-                setPadding(px(14), px(14), px(14), px(14))
+            ).apply { topMargin = px(16) }
+            addView(TextView(context).apply {
+                text = "Machines ${store.profiles().size + sshStore.profiles().size}"
+                textSize = 16f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(textPrimary)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    .apply { marginEnd = px(8) }
-                addView(TextView(context).apply {
-                    text = "ADB"
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(textPrimary)
-                })
-                addView(TextView(context).apply {
-                    text = "Saved hosts & shell"
-                    textSize = 12f
-                    setTextColor(textSecondary)
-                    setPadding(0, px(2), 0, 0)
-                })
-                setOnClickListener {
-                    startActivity(Intent(context, AdbFullScreenActivity::class.java))
-                }
             })
+            addView(pillButton("+ New machine", accentPink, Color.WHITE, fill = true) {
+                showNewMachineDialog()
+            })
+        }
+        addView(machinesHeader) // placeholder, added below in root
 
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgCard, borderCard, 14)
-                setPadding(px(14), px(14), px(14), px(14))
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                addView(TextView(context).apply {
-                    text = "scrcpy"
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(textPrimary)
-                })
-                addView(TextView(context).apply {
-                    text = "Live mirror & stream"
-                    textSize = 12f
-                    setTextColor(textSecondary)
-                    setPadding(0, px(2), 0, 0)
-                })
-                setOnClickListener {
-                    startActivity(Intent(context, ScrcpyFullScreenActivity::class.java))
+        machineSearchInput = EditText(this).apply {
+            hint = "Search machines, hosts, tags..."
+            setHintTextColor(textMuted)
+            setTextColor(textPrimary)
+            textSize = 12f
+            background = cardDrawable(bgCard, borderCard, 10)
+            setPadding(px(12), px(9), px(12), px(9))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = px(8) }
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    machineFilterQuery = s?.toString()?.trim().orEmpty()
+                    renderMachineList()
                 }
+                override fun afterTextChanged(s: Editable?) {}
             })
         }
 
-        // 6. Bottom middle footer: powered by phyluke
+        machineList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        // ---- Footer ----
         val footer = TextView(this).apply {
             text = "powered by phyluke"
             textSize = 12f
@@ -231,12 +193,13 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(px(18), px(40), px(18), px(16))
+            setPadding(px(18), px(36), px(18), px(16))
             addView(headerRow)
             addView(statsRow)
-            addView(terminalCard)
-            addView(sshMachinesCard)
-            addView(modeTilesRow)
+            addView(resumeCard)
+            addView(machinesHeader)
+            addView(machineSearchInput)
+            addView(machineList)
             addView(footer)
         }
 
@@ -246,19 +209,66 @@ class MainActivity : AppCompatActivity() {
             addView(root)
         })
 
-        renderTerminalList()
-        renderSshList()
+        renderMachineList()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::termList.isInitialized) renderTerminalList()
-        if (::sshList.isInitialized) renderSshList()
+        if (::machineList.isInitialized) renderMachineList()
+    }
+
+    private fun statCard(title: String, countView: TextView, dp: Float, px: (Int) -> Int): LinearLayout {
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardDrawable(bgCard, borderCard, 12)
+            setPadding(px(14), px(12), px(14), px(12))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { marginEnd = px(8) }
+            addView(TextView(context).apply {
+                text = title
+                textSize = 11f
+                setTextColor(textSecondary)
+            })
+            addView(countView.apply {
+                setPadding(0, px(4), 0, 0)
+            })
+        }
+    }
+
+    private fun buildResumeCard(dp: Float, px: (Int) -> Int): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardDrawable(bgCard, borderCard, 12)
+            setPadding(px(14), px(12), px(14), px(12))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = px(12) }
+
+            val top = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(context).apply {
+                    text = "Resume sessions"
+                    textSize = 15f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(textPrimary)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(TextView(context).apply {
+                    text = "1 active"
+                    textSize = 12f
+                    setTextColor(textSecondary)
+                })
+            }
+            addView(top)
+        }
     }
 
     private fun refreshStats() {
         savedCountView.text = (sshStore.profiles().size + loadLocalTerminals().size).toString()
-        liveAdbCountView.text = store.profiles().size.toString()
+        liveCountView.text = store.profiles().size.toString()
+        // Update machines header count
     }
 
     private fun showTopOverflowMenu() {
@@ -267,119 +277,233 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Nexus")
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> addAdbDeviceDialog()
+                    0 -> showNewMachineDialog()
                     1 -> editStreamSettingsDialog()
                 }
             }
             .show()
     }
 
-    private fun buildTerminalCard(dp: Float): LinearLayout {
+    private fun renderMachineList() {
+        val dp = resources.displayMetrics.density
         fun px(v: Int) = (v * dp).toInt()
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(bgCard, borderCard, 14)
-            setPadding(px(14), px(14), px(14), px(14))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
+        machineList.removeAllViews()
+        refreshStats()
 
-            val topRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(TextView(context).apply {
-                    text = "Terminal (local & Distro)"
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(textPrimary)
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                addView(pillButton("+ New", accentBlue, Color.WHITE, fill = true) {
-                    editLocalTerminalDialog(null)
-                })
+        val q = machineFilterQuery.lowercase()
+
+        // Build combined list: ADB profiles + SSH profiles + local terminals
+        val items = mutableListOf<MachineItem>()
+
+        for (p in store.profiles()) {
+            if (p.label.lowercase().contains(q) || p.host.lowercase().contains(q)) {
+                items.add(MachineItem.Adb(p))
             }
-            addView(topRow)
+        }
+        for (h in sshStore.profiles()) {
+            if (h.label.lowercase().contains(q) || h.host.lowercase().contains(q) ||
+                h.username.lowercase().contains(q) || h.tags.any { it.lowercase().contains(q) }) {
+                items.add(MachineItem.Ssh(h))
+            }
+        }
+        for (t in loadLocalTerminals()) {
+            if (t.label.lowercase().contains(q)) {
+                items.add(MachineItem.Local(t))
+            }
+        }
 
-            termSearchInput = EditText(context).apply {
-                hint = "Search / Local / Distro"
-                setHintTextColor(textMuted)
-                setTextColor(textPrimary)
+        if (items.isEmpty()) {
+            machineList.addView(TextView(this).apply {
+                text = "No machines found. Tap + New machine to add one."
                 textSize = 12f
-                background = cardDrawable(bgInput, borderCard, 10)
-                setPadding(px(12), px(9), px(12), px(9))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(10) }
-                addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                        termFilterQuery = s?.toString()?.trim().orEmpty()
-                        renderTerminalList()
-                    }
-                    override fun afterTextChanged(s: Editable?) {}
-                })
-            }
-            addView(termSearchInput)
-
-            addView(termList.apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(10) }
+                setTextColor(textSecondary)
+                background = cardDrawable(bgCard, borderCard, 10)
+                setPadding(px(12), px(12), px(12), px(12))
             })
+            return
+        }
+
+        for (item in items) {
+            machineList.addView(buildMachineRow(item, dp, px))
         }
     }
 
-    private fun renderTerminalList() {
-        val dp = resources.displayMetrics.density
-        fun px(v: Int) = (v * dp).toInt()
-        termList.removeAllViews()
-        refreshStats()
+    private fun buildMachineRow(item: MachineItem, dp: Float, px: (Int) -> Int): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardDrawable(bgCard, borderCard, 12)
+            setPadding(px(12), px(11), px(12), px(11))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = px(8) }
 
-        val q = termFilterQuery.lowercase()
-        val all = loadLocalTerminals()
-        val filtered = if (q.isEmpty()) all else all.filter {
-            it.label.lowercase().contains(q) || it.shellCmd.lowercase().contains(q)
-        }
-
-        for (t in filtered) {
-            val row = LinearLayout(this).apply {
+            val top = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = cardDrawable(bgInput, borderCard, 12)
-                setPadding(px(12), px(10), px(12), px(10))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = px(8) }
 
+                // Icon
+                addView(ImageView(context).apply {
+                    setImageResource(when (item) {
+                        is MachineItem.Adb -> android.R.drawable.ic_menu_directions
+                        is MachineItem.Ssh -> android.R.drawable.ic_menu_info_details
+                        is MachineItem.Local -> android.R.drawable.ic_menu_input
+                    })
+                    setColorFilter(textSecondary)
+                    layoutParams = LinearLayout.LayoutParams(px(24), px(24))
+                }).apply { layoutParams = LinearLayout.LayoutParams(px(24), px(24)).apply { marginEnd = px(10) } }
+
+                // Info
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     addView(TextView(context).apply {
-                        text = t.label
+                        text = item.displayLabel
                         textSize = 15f
                         setTypeface(null, Typeface.BOLD)
                         setTextColor(textPrimary)
                     })
                     addView(TextView(context).apply {
-                        text = t.shellCmd
-                        textSize = 11f
+                        text = item.displaySubtitle
+                        textSize = 12f
                         typeface = Typeface.MONOSPACE
                         setTextColor(textSecondary)
                     })
                 })
-                addView(pillButton("Open", accentGreen, Color.WHITE, fill = true) {
-                    startActivity(
-                        Intent(context, AdbShellActivity::class.java)
-                            .putExtra(AdbShellActivity.EXTRA_LABEL, t.label)
+
+                // Overflow menu
+                addView(pillButton("•••", btnNeutral, textSecondary) {
+                    showMachineOverflow(item)
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     )
                 })
             }
-            termList.addView(row)
+            addView(top)
+
+            // Action buttons row
+            val actions = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, px(8), 0, 0)
+            }
+
+            when (item) {
+                is MachineItem.Adb -> {
+                    actions.addView(pillButton("Connect", accentPink, Color.WHITE, fill = true) {
+                        startActivity(Intent(context, AdbShellActivity::class.java).apply {
+                            putExtra(AdbShellActivity.EXTRA_HOST, item.profile.host)
+                            putExtra(AdbShellActivity.EXTRA_PORT, item.profile.port)
+                            putExtra(AdbShellActivity.EXTRA_LABEL, item.profile.label)
+                        })
+                    }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(6) } })
+                    actions.addView(pillButton("scrcpy", accentBlue, Color.WHITE, fill = true) {
+                        startActivity(Intent(context, ScrcpyFullScreenActivity::class.java))
+                    })
+                }
+                is MachineItem.Ssh -> {
+                    actions.addView(pillButton("Connect", accentPink, Color.WHITE, fill = true) {
+                        openSshTerminal(item.profile)
+                    }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(6) } })
+                    actions.addView(pillButton("Edit", btnNeutral, textSecondary) {
+                        editSshProfile(item.profile)
+                    })
+                }
+                is MachineItem.Local -> {
+                    actions.addView(pillButton("Open", accentPink, Color.WHITE, fill = true) {
+                        startActivity(Intent(context, AdbShellActivity::class.java)
+                            .putExtra(AdbShellActivity.EXTRA_LABEL, item.terminal.label))
+                    })
+                }
+            }
+            addView(actions)
+
+            // Meta row
+            val meta = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, px(8), 0, 0)
+            }
+            meta.addView(badgePill(item.authLabel, btnNeutral, textSecondary).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(6) }
+            })
+            meta.addView(badgePill(item.lastUsed, btnNeutral, textMuted))
+            addView(meta)
+
+            if (item.tags.isNotEmpty()) {
+                val tagStrip = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, px(6), 0, 0)
+                }
+                item.tags.forEachIndexed { i, tag ->
+                    tagStrip.addView(badgePill("# $tag", bgCard, textSecondary).apply {
+                        if (i < item.tags.lastIndex) {
+                            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(6) }
+                        }
+                    })
+                }
+                addView(HorizontalScrollView(context).apply {
+                    isHorizontalScrollBarEnabled = false
+                    addView(tagStrip)
+                })
+            }
         }
+    }
+
+    private fun showMachineOverflow(item: MachineItem) {
+        val options = when (item) {
+            is MachineItem.Adb -> arrayOf("Edit", "Delete")
+            is MachineItem.Ssh -> arrayOf("Edit", "Delete")
+            is MachineItem.Local -> arrayOf("Edit", "Delete")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(item.displayLabel)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> {
+                        when (item) {
+                            is MachineItem.Adb -> editAdbDevice(item.profile)
+                            is MachineItem.Ssh -> editSshProfile(item.profile)
+                            is MachineItem.Local -> editLocalTerminalDialog(item.terminal)
+                        }
+                    }
+                    1 -> {
+                        when (item) {
+                            is MachineItem.Adb -> {
+                                store.saveProfiles(store.profiles().filter { it.id != item.profile.id })
+                                renderMachineList()
+                            }
+                            is MachineItem.Ssh -> {
+                                sshStore.delete(item.profile.id)
+                                renderMachineList()
+                            }
+                            is MachineItem.Local -> {
+                                val items = loadLocalTerminals().filterNot { it.id == item.terminal.id }
+                                saveCustomLocalTerminals(items)
+                                renderMachineList()
+                            }
+                        }
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showNewMachineDialog() {
+        // Type selector first
+        val types = arrayOf("ADB device", "SSH machine", "Local terminal")
+        AlertDialog.Builder(this)
+            .setTitle("New machine")
+            .setItems(types) { _, which ->
+                when (which) {
+                    0 -> addAdbDeviceDialog()
+                    1 -> editSshProfile(null)
+                    2 -> editLocalTerminalDialog(null)
+                }
+            }
+            .show()
     }
 
     private fun loadLocalTerminals(): List<LocalTermProfile> {
@@ -436,194 +560,10 @@ class MainActivity : AppCompatActivity() {
                 val updated = loadLocalTerminals().filterNot { it.id == existing?.id } +
                     LocalTermProfile(existing?.id ?: UUID.randomUUID().toString(), lbl, cmd)
                 saveCustomLocalTerminals(updated)
-                renderTerminalList()
+                renderMachineList()
             }
             .setNegativeButton("Cancel", null)
             .show()
-    }
-
-    private fun buildSshMachinesCard(dp: Float): LinearLayout {
-        fun px(v: Int) = (v * dp).toInt()
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(bgCard, borderCard, 14)
-            setPadding(px(14), px(14), px(14), px(14))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
-
-            val topRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(TextView(context).apply {
-                    text = "SSH machines"
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(textPrimary)
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                addView(pillButton("+ New", accentPink, Color.WHITE, fill = true) {
-                    editSshProfile(null)
-                })
-            }
-            addView(topRow)
-
-            sshSearchInput = EditText(context).apply {
-                hint = "Search machines, hosts, tags..."
-                setHintTextColor(textMuted)
-                setTextColor(textPrimary)
-                textSize = 12f
-                background = cardDrawable(bgInput, borderCard, 10)
-                setPadding(px(12), px(9), px(12), px(9))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(10) }
-                addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                        sshFilterQuery = s?.toString()?.trim().orEmpty()
-                        renderSshList()
-                    }
-                    override fun afterTextChanged(s: Editable?) {}
-                })
-            }
-            addView(sshSearchInput)
-
-            addView(sshList.apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = px(10) }
-            })
-        }
-    }
-
-    private fun renderSshList() {
-        val dp = resources.displayMetrics.density
-        fun px(v: Int) = (v * dp).toInt()
-        sshList.removeAllViews()
-        refreshStats()
-
-        val q = sshFilterQuery.lowercase()
-        val allHosts = sshStore.profiles()
-        val hosts = if (q.isEmpty()) allHosts else allHosts.filter { h ->
-            h.label.lowercase().contains(q) ||
-                h.host.lowercase().contains(q) ||
-                h.username.lowercase().contains(q) ||
-                h.tags.any { it.lowercase().contains(q) }
-        }
-
-        if (hosts.isEmpty()) {
-            sshList.addView(TextView(this).apply {
-                text = if (allHosts.isEmpty()) {
-                    "No SSH machines saved yet. Tap + New to add one."
-                } else {
-                    "No matching machines for \"$sshFilterQuery\"."
-                }
-                textSize = 12f
-                setTextColor(textSecondary)
-                background = cardDrawable(bgInput, borderCard, 10)
-                setPadding(px(12), px(12), px(12), px(12))
-            })
-            return
-        }
-
-        for (h in hosts) {
-            val rowCard = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgInput, borderCard, 12)
-                setPadding(px(12), px(11), px(12), px(11))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = px(8) }
-
-                val top = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        addView(TextView(context).apply {
-                            text = h.label
-                            textSize = 15f
-                            setTypeface(null, Typeface.BOLD)
-                            setTextColor(textPrimary)
-                        })
-                        addView(TextView(context).apply {
-                            text = "${h.username}@${h.host}:${h.port}"
-                            textSize = 12f
-                            typeface = Typeface.MONOSPACE
-                            setTextColor(textSecondary)
-                        })
-                    })
-                    addView(pillButton("Connect", accentGreen, Color.WHITE, fill = true) {
-                        openSshTerminal(h)
-                    }.apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.WRAP_CONTENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply { marginEnd = px(6) }
-                    })
-                    addView(pillButton("Edit", btnNeutral, textSecondary) {
-                        editSshProfile(h)
-                    })
-                }
-                addView(top)
-
-                val metaRow = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(0, px(8), 0, 0)
-                }
-                val authText = if (h.authMode == SshAuthMode.PASSWORD) "askpw" else h.authMode.label
-                metaRow.addView(badgePill(authText, btnNeutral, textSecondary).apply {
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { marginEnd = px(6) }
-                })
-                if (h.startTmux) {
-                    metaRow.addView(badgePill("tmux:${h.tmuxPrefix}", btnNeutral, textSecondary).apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.WRAP_CONTENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply { marginEnd = px(6) }
-                    })
-                }
-                val lastUsedStr = if (h.lastUsedAt > 0L) {
-                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(h.lastUsedAt))
-                } else {
-                    "never"
-                }
-                metaRow.addView(badgePill(lastUsedStr, btnNeutral, textMuted))
-                addView(metaRow)
-
-                if (h.tags.isNotEmpty()) {
-                    val tagStrip = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        setPadding(0, px(6), 0, 0)
-                    }
-                    h.tags.forEachIndexed { i, tag ->
-                        tagStrip.addView(badgePill("# $tag", bgCard, textSecondary).apply {
-                            if (i < h.tags.lastIndex) {
-                                layoutParams = LinearLayout.LayoutParams(
-                                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                                    LinearLayout.LayoutParams.WRAP_CONTENT
-                                ).apply { marginEnd = px(6) }
-                            }
-                        })
-                    }
-                    addView(HorizontalScrollView(context).apply {
-                        isHorizontalScrollBarEnabled = false
-                        addView(tagStrip)
-                    })
-                }
-            }
-            sshList.addView(rowCard)
-        }
     }
 
     private fun editSshProfile(existing: SshHostProfile?) {
@@ -739,14 +679,14 @@ class MainActivity : AppCompatActivity() {
                         lastUsedAt = existing?.lastUsedAt ?: 0L,
                     )
                 )
-                renderSshList()
+                renderMachineList()
             }
             .setNegativeButton("Cancel", null)
 
         if (existing != null) {
             builder.setNeutralButton("Delete") { _, _ ->
                 sshStore.delete(existing.id)
-                renderSshList()
+                renderMachineList()
             }
         }
         builder.show()
@@ -769,6 +709,35 @@ class MainActivity : AppCompatActivity() {
             putExtra(SshTerminalActivity.EXTRA_MOSH_LOCALE, profile.moshLocale)
         }
         startActivity(intent)
+    }
+
+    private fun editAdbDevice(p: Profile) {
+        val label = field("Label (e.g. Redmi Note 8 Pro)", p.label)
+        val host = field("IP address", p.host)
+        val port = field("Port", p.port.toString(), numeric = true)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 20, 48, 8)
+            addView(label); addView(host); addView(port)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Edit Device")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val h = host.text.toString().trim()
+                if (h.isEmpty()) return@setPositiveButton
+                val updated = Profile(
+                    p.id,
+                    label.text.toString().trim().ifEmpty { h },
+                    h,
+                    port.text.toString().toIntOrNull() ?: 5555,
+                )
+                val all = store.profiles().filter { it.id != p.id } + updated
+                store.saveProfiles(all.sortedBy { it.label.lowercase() })
+                renderMachineList()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun addAdbDeviceDialog() {
@@ -794,7 +763,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 val all = store.profiles() + updated
                 store.saveProfiles(all.sortedBy { it.label.lowercase() })
-                refreshStats()
+                renderMachineList()
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -861,7 +830,7 @@ class MainActivity : AppCompatActivity() {
         setTextColor(fg)
         gravity = Gravity.CENTER
         setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
-        background = cardDrawable(bg, if (fill && bg == accentGreen) Color.parseColor("#2EA043") else borderCard, 10)
+        background = cardDrawable(bg, if (fill) accentPink else borderCard, 10)
         setOnClickListener { onClick() }
     }
 
@@ -869,5 +838,38 @@ class MainActivity : AppCompatActivity() {
         this.hint = hint
         setText(value)
         if (numeric) inputType = InputType.TYPE_CLASS_NUMBER
+    }
+
+    // ---- MachineItem sealed class ----
+    sealed class MachineItem {
+        abstract val displayLabel: String
+        abstract val displaySubtitle: String
+        abstract val authLabel: String
+        abstract val lastUsed: String
+        abstract val tags: List<String>
+
+        data class Adb(val profile: Profile) : MachineItem() {
+            override val displayLabel: String = profile.label
+            override val displaySubtitle: String = "${profile.host}:${profile.port}  ·  ADB"
+            override val authLabel: String = "ADB key"
+            override val lastUsed: String = "never"
+            override val tags: List<String> = emptyList()
+        }
+        data class Ssh(val profile: SshHostProfile) : MachineItem() {
+            override val displayLabel: String = profile.label
+            override val displaySubtitle: String = "${profile.username}@${profile.host}:${profile.port}  ·  SSH"
+            override val authLabel: String = if (profile.authMode == SshAuthMode.PASSWORD) "askpw" else profile.authMode.label
+            override val lastUsed: String = if (profile.lastUsedAt > 0L) {
+                DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(profile.lastUsedAt))
+            } else { "never" }
+            override val tags: List<String> = profile.tags
+        }
+        data class Local(val terminal: LocalTermProfile) : MachineItem() {
+            override val displayLabel: String = terminal.label
+            override val displaySubtitle: String = terminal.shellCmd + "  ·  Local"
+            override val authLabel: String = "Local"
+            override val lastUsed: String = "never"
+            override val tags: List<String> = emptyList()
+        }
     }
 }
