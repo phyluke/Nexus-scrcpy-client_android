@@ -5,13 +5,17 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
@@ -24,12 +28,15 @@ import dev.minimal.scrcpyclient.data.AppStore
 import dev.minimal.scrcpyclient.data.Profile
 import dev.minimal.scrcpyclient.data.StreamSettings
 import dev.minimal.scrcpyclient.data.Units
+import dev.minimal.scrcpyclient.ssh.SshAuthMode
 import dev.minimal.scrcpyclient.ssh.SshHostProfile
 import dev.minimal.scrcpyclient.ssh.SshProfileStore
 import java.io.File
+import java.text.DateFormat
+import java.util.Date
 import java.util.UUID
 
-/** Main hub for scrcpy streaming, full ADB toolkit, and Conduit SSH (askpw) terminal sessions. */
+/** Nexus hub matching Conduit SSH workspace structure alongside scrcpy and ADB tools. */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var store: AppStore
@@ -37,11 +44,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var keys: AdbKeyStore
     private lateinit var list: LinearLayout
     private lateinit var sshList: LinearLayout
+    private lateinit var sshSearchInput: EditText
+    private lateinit var savedCountView: TextView
+    private lateinit var adbCountView: TextView
     private lateinit var logCard: LinearLayout
     private lateinit var logView: TextView
     private lateinit var cmdInput: EditText
     private lateinit var targetSummary: TextView
     private var selectedProfile: Profile? = null
+    private var sshFilterQuery: String = ""
     @Volatile private var busy = false
 
     private val bgPage = Color.parseColor("#0D1117")
@@ -53,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private val textMuted = Color.parseColor("#484F58")
     private val accentGreen = Color.parseColor("#238636")
     private val accentBlue = Color.parseColor("#1F6FEB")
+    private val accentPink = Color.parseColor("#DB61A2")
     private val btnNeutral = Color.parseColor("#21262D")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,6 +84,54 @@ class MainActivity : AppCompatActivity() {
 
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         sshList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        savedCountView = TextView(this).apply {
+            text = "0"
+            textSize = 20f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(textPrimary)
+        }
+        adbCountView = TextView(this).apply {
+            text = "0"
+            textSize = 20f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(textPrimary)
+        }
+
+        val statsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = px(12) }
+
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardDrawable(bgCard, borderCard, 12)
+                setPadding(px(14), px(10), px(14), px(10))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { marginEnd = px(8) }
+                addView(TextView(context).apply {
+                    text = "Saved machines"
+                    textSize = 11f
+                    setTextColor(textSecondary)
+                })
+                addView(savedCountView)
+            })
+
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardDrawable(bgCard, borderCard, 12)
+                setPadding(px(14), px(10), px(14), px(10))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(context).apply {
+                    text = "ADB / scrcpy targets"
+                    textSize = 11f
+                    setTextColor(textSecondary)
+                })
+                addView(adbCountView)
+            })
+        }
 
         logView = TextView(this).apply {
             typeface = Typeface.MONOSPACE
@@ -136,8 +196,8 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
-        val adbHubCard = buildAdbHubCard(dp)
         val conduitCard = buildConduitCard(dp)
+        val adbHubCard = buildAdbHubCard(dp)
 
         val footer = TextView(this).apply {
             text = "Nexus Hub - phyluke"
@@ -158,15 +218,21 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(textPrimary)
             })
             addView(TextView(context).apply {
-                text = "scrcpy - ADB - Conduit SSH Terminal"
+                text = "SSH workspaces - ADB - scrcpy"
                 textSize = 13f
                 setTextColor(textSecondary)
-                setPadding(0, px(2), 0, px(16))
+                setPadding(0, px(2), 0, px(14))
             })
-            addView(list)
+            addView(statsRow)
+            addView(conduitCard)
+            addView(list.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = px(14) }
+            })
             addView(actionBar)
             addView(adbHubCard)
-            addView(conduitCard)
             addView(logCard)
             addView(footer)
         }
@@ -180,16 +246,23 @@ class MainActivity : AppCompatActivity() {
         renderSshList()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::sshList.isInitialized) renderSshList()
+        if (::list.isInitialized) renderList()
+    }
+
+    private fun refreshStats() {
+        savedCountView.text = sshStore.profiles().size.toString()
+        adbCountView.text = store.profiles().size.toString()
+    }
+
     private fun buildConduitCard(dp: Float): LinearLayout {
         fun px(v: Int) = (v * dp).toInt()
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = cardDrawable(bgCard, borderCard, 14)
             setPadding(px(14), px(14), px(14), px(14))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = px(14) }
 
             val topRow = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -198,23 +271,46 @@ class MainActivity : AppCompatActivity() {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     addView(TextView(context).apply {
-                        text = "Conduit SSH (askpw)"
-                        textSize = 15f
+                        text = "Machines"
+                        textSize = 16f
                         setTypeface(null, Typeface.BOLD)
                         setTextColor(textPrimary)
                     })
                     addView(TextView(context).apply {
-                        text = "Saved host/port/user - prompts password every login"
+                        text = "SSH & terminal hosts - askpw per login"
                         textSize = 12f
                         setTextColor(textSecondary)
                         setPadding(0, px(2), 0, 0)
                     })
                 })
-                addView(pillButton("+ SSH Host", accentBlue, Color.WHITE, fill = true) {
+                addView(pillButton("+ New machine", accentPink, Color.WHITE, fill = true) {
                     editSshProfile(null)
                 })
             }
             addView(topRow)
+
+            sshSearchInput = EditText(context).apply {
+                hint = "Search machines, hosts, tags..."
+                setHintTextColor(textMuted)
+                setTextColor(textPrimary)
+                textSize = 12f
+                background = cardDrawable(bgInput, borderCard, 10)
+                setPadding(px(12), px(9), px(12), px(9))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = px(10) }
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                        sshFilterQuery = s?.toString()?.trim().orEmpty()
+                        renderSshList()
+                    }
+                    override fun afterTextChanged(s: Editable?) {}
+                })
+            }
+            addView(sshSearchInput)
+
             addView(sshList.apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -228,11 +324,24 @@ class MainActivity : AppCompatActivity() {
         val dp = resources.displayMetrics.density
         fun px(v: Int) = (v * dp).toInt()
         sshList.removeAllViews()
+        refreshStats()
 
-        val hosts = sshStore.profiles()
+        val q = sshFilterQuery.lowercase()
+        val allHosts = sshStore.profiles()
+        val hosts = if (q.isEmpty()) allHosts else allHosts.filter { h ->
+            h.label.lowercase().contains(q) ||
+                h.host.lowercase().contains(q) ||
+                h.username.lowercase().contains(q) ||
+                h.tags.any { it.lowercase().contains(q) }
+        }
+
         if (hosts.isEmpty()) {
             sshList.addView(TextView(this).apply {
-                text = "No SSH hosts saved yet. Tap + SSH Host to add one."
+                text = if (allHosts.isEmpty()) {
+                    "No machines saved yet. Tap + New machine to add one."
+                } else {
+                    "No matching machines for \"$sshFilterQuery\"."
+                }
                 textSize = 12f
                 setTextColor(textSecondary)
                 background = cardDrawable(bgInput, borderCard, 10)
@@ -244,8 +353,8 @@ class MainActivity : AppCompatActivity() {
         for (h in hosts) {
             val rowCard = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = cardDrawable(bgInput, borderCard, 10)
-                setPadding(px(12), px(10), px(12), px(10))
+                background = cardDrawable(bgInput, borderCard, 12)
+                setPadding(px(12), px(11), px(12), px(11))
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -264,13 +373,13 @@ class MainActivity : AppCompatActivity() {
                             setTextColor(textPrimary)
                         })
                         addView(TextView(context).apply {
-                            text = "${h.username}@${h.host}:${h.port}  [askpw]"
+                            text = "${h.username}@${h.host}:${h.port}"
                             textSize = 12f
                             typeface = Typeface.MONOSPACE
                             setTextColor(textSecondary)
                         })
                     })
-                    addView(pillButton("Login", accentGreen, Color.WHITE, fill = true) {
+                    addView(pillButton("Connect", accentGreen, Color.WHITE, fill = true) {
                         openSshTerminal(h)
                     }.apply {
                         layoutParams = LinearLayout.LayoutParams(
@@ -283,49 +392,199 @@ class MainActivity : AppCompatActivity() {
                     })
                 }
                 addView(top)
+
+                val metaRow = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, px(8), 0, 0)
+                }
+                val authText = if (h.authMode == SshAuthMode.PASSWORD) "${h.authMode.label} (askpw)" else h.authMode.label
+                metaRow.addView(badgePill(authText, btnNeutral, textSecondary).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { marginEnd = px(6) }
+                })
+                if (h.startTmux) {
+                    metaRow.addView(badgePill("tmux:${h.tmuxPrefix}", btnNeutral, textSecondary).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = px(6) }
+                    })
+                }
+                if (h.useMosh) {
+                    metaRow.addView(badgePill("mosh:${h.moshLocale}", btnNeutral, textSecondary).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = px(6) }
+                    })
+                }
+                val lastUsedStr = if (h.lastUsedAt > 0L) {
+                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(h.lastUsedAt))
+                } else {
+                    "never"
+                }
+                metaRow.addView(badgePill(lastUsedStr, btnNeutral, textMuted))
+                addView(metaRow)
+
+                if (h.tags.isNotEmpty()) {
+                    val tagStrip = LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        setPadding(0, px(6), 0, 0)
+                    }
+                    h.tags.forEachIndexed { i, tag ->
+                        tagStrip.addView(badgePill("# $tag", bgCard, textSecondary).apply {
+                            if (i < h.tags.lastIndex) {
+                                layoutParams = LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply { marginEnd = px(6) }
+                            }
+                        })
+                    }
+                    addView(HorizontalScrollView(context).apply {
+                        isHorizontalScrollBarEnabled = false
+                        addView(tagStrip)
+                    })
+                }
             }
             sshList.addView(rowCard)
         }
     }
 
     private fun editSshProfile(existing: SshHostProfile?) {
-        val labelField = field("Display name (e.g. NAS SSH)", existing?.label ?: "")
+        val labelField = field("Display name", existing?.label ?: "")
         val hostField = field("Host or IP", existing?.host ?: "")
-        val portField = field("Port (default 22)", (existing?.port ?: 22).toString(), numeric = true)
+        val portField = field("Port (22)", (existing?.port ?: 22).toString(), numeric = true)
         val userField = field("Username", existing?.username ?: "")
-        val timeoutField = field("Connection timeout (sec)", (existing?.timeoutSec ?: 12).toString(), numeric = true)
+
+        val authGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+        }
+        val rbPassword = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "Password - Use account password for SSH login"
+            setTextColor(textPrimary)
+            isChecked = (existing?.authMode ?: SshAuthMode.PASSWORD) == SshAuthMode.PASSWORD
+        }
+        val rbPrivateKey = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "Private key - Use a PEM or OpenSSH private key"
+            setTextColor(textPrimary)
+            isChecked = existing?.authMode == SshAuthMode.PRIVATE_KEY
+        }
+        val rbHardwareKey = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "Hardware key - OpenSSH *_sk stub (USB/NFC)"
+            setTextColor(textPrimary)
+            isChecked = existing?.authMode == SshAuthMode.HARDWARE_KEY
+        }
+        authGroup.addView(rbPassword)
+        authGroup.addView(rbPrivateKey)
+        authGroup.addView(rbHardwareKey)
+
         val askPwBox = CheckBox(this).apply {
             text = "Ask for password when logging in (never saved)"
+            setTextColor(textSecondary)
             isChecked = true
         }
-        val tmuxBox = CheckBox(this).apply {
-            text = "Start tmux session on connect"
-            isChecked = existing?.startTmux ?: false
+        val keyPathField = field("Private key file path (e.g. /sdcard/id_ed25519)", existing?.privateKeyPath ?: "")
+        val keyStubField = field("OpenSSH *_sk stub path or text", existing?.hardwareKeyStub ?: "")
+        val keyPassField = EditText(this).apply {
+            hint = "Key / stub passphrase (optional)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
 
-        val box = LinearLayout(this).apply {
+        val tagsField = field("Tags (comma separated, e.g. lab, homelab)", existing?.tags?.joinToString(", ") ?: "")
+        val timeoutField = field("Connection timeout (sec)", (existing?.timeoutSec ?: 12).toString(), numeric = true)
+        val tmuxBox = CheckBox(this).apply {
+            text = "Start tmux on connect"
+            setTextColor(textSecondary)
+            isChecked = existing?.startTmux ?: false
+        }
+        val tmuxPrefixField = field("Tmux prefix (e.g. Ctrl-B)", existing?.tmuxPrefix ?: "Ctrl-B")
+        val moshBox = CheckBox(this).apply {
+            text = "Connect with Mosh"
+            setTextColor(textSecondary)
+            isChecked = existing?.useMosh ?: false
+        }
+        val moshLocaleField = field("Mosh locale (default C.UTF-8)", existing?.moshLocale ?: "C.UTF-8")
+        val predEchoBox = CheckBox(this).apply {
+            text = "Predictive echo (experimental)"
+            setTextColor(textSecondary)
+            isChecked = existing?.predictiveEcho ?: false
+        }
+
+        fun sectionHeader(title: String, subtitle: String) = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 20, 48, 8)
+            setPadding(0, 16, 0, 6)
+            addView(TextView(context).apply {
+                text = title
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(textPrimary)
+            })
+            addView(TextView(context).apply {
+                text = subtitle
+                textSize = 11f
+                setTextColor(textSecondary)
+            })
+        }
+
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 12, 40, 12)
+            addView(sectionHeader("Connection", "Where to reach this machine."))
             addView(labelField)
             addView(hostField)
             addView(portField)
             addView(userField)
-            addView(timeoutField)
+
+            addView(sectionHeader("Authentication", "Credentials are never saved when askpw is active."))
+            addView(authGroup)
             addView(askPwBox)
+            addView(keyPathField)
+            addView(keyStubField)
+            addView(keyPassField)
+
+            addView(sectionHeader("Advanced", "Optional tagging, tmux, and Mosh settings."))
+            addView(tagsField)
+            addView(timeoutField)
             addView(tmuxBox)
+            addView(tmuxPrefixField)
+            addView(moshBox)
+            addView(moshLocaleField)
+            addView(predEchoBox)
+        }
+
+        val scrollForm = ScrollView(this).apply {
+            addView(inner)
         }
 
         val builder = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "New SSH Machine" else "Edit SSH Machine")
-            .setMessage("Passwords are never saved; you type it each time you connect.")
-            .setView(box)
+            .setTitle(if (existing == null) "New machine" else "Edit machine")
+            .setView(scrollForm)
             .setPositiveButton("Save") { _, _ ->
                 val hostVal = hostField.text.toString().trim()
                 val userVal = userField.text.toString().trim()
                 if (hostVal.isEmpty() || userVal.isEmpty()) return@setPositiveButton
                 val lbl = labelField.text.toString().trim().ifEmpty { "$userVal@$hostVal" }
                 val prt = portField.text.toString().toIntOrNull() ?: 22
+                val mode = when (authGroup.checkedRadioButtonId) {
+                    rbPrivateKey.id -> SshAuthMode.PRIVATE_KEY
+                    rbHardwareKey.id -> SshAuthMode.HARDWARE_KEY
+                    else -> SshAuthMode.PASSWORD
+                }
+                val parsedTags = tagsField.text.toString()
+                    .split(",")
+                    .map { it.trim().removePrefix("#").trim() }
+                    .filter { it.isNotEmpty() }
                 val tSec = timeoutField.text.toString().toIntOrNull() ?: 12
+                val tPrefix = tmuxPrefixField.text.toString().trim().ifEmpty { "Ctrl-B" }
+                val locale = moshLocaleField.text.toString().trim().ifEmpty { "C.UTF-8" }
+
                 sshStore.upsert(
                     SshHostProfile(
                         id = existing?.id ?: sshStore.newId(),
@@ -333,9 +592,18 @@ class MainActivity : AppCompatActivity() {
                         host = hostVal,
                         port = prt,
                         username = userVal,
+                        authMode = mode,
                         askPasswordEveryLogin = true,
+                        privateKeyPath = keyPathField.text.toString().trim(),
+                        hardwareKeyStub = keyStubField.text.toString().trim(),
+                        tags = parsedTags,
                         timeoutSec = tSec,
                         startTmux = tmuxBox.isChecked,
+                        tmuxPrefix = tPrefix,
+                        useMosh = moshBox.isChecked,
+                        moshLocale = locale,
+                        predictiveEcho = predEchoBox.isChecked,
+                        lastUsedAt = existing?.lastUsedAt ?: 0L,
                     )
                 )
                 renderSshList()
@@ -352,13 +620,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openSshTerminal(profile: SshHostProfile) {
+        sshStore.touchLastUsed(profile.id)
         val intent = Intent(this, SshTerminalActivity::class.java).apply {
             putExtra(SshTerminalActivity.EXTRA_LABEL, profile.label)
             putExtra(SshTerminalActivity.EXTRA_HOST, profile.host)
             putExtra(SshTerminalActivity.EXTRA_PORT, profile.port)
             putExtra(SshTerminalActivity.EXTRA_USER, profile.username)
+            putExtra(SshTerminalActivity.EXTRA_AUTH_MODE, profile.authMode.wire)
+            putExtra(SshTerminalActivity.EXTRA_KEY_PATH, profile.privateKeyPath)
+            putExtra(SshTerminalActivity.EXTRA_KEY_STUB, profile.hardwareKeyStub)
             putExtra(SshTerminalActivity.EXTRA_TIMEOUT_SEC, profile.timeoutSec)
             putExtra(SshTerminalActivity.EXTRA_START_TMUX, profile.startTmux)
+            putExtra(SshTerminalActivity.EXTRA_TMUX_PREFIX, profile.tmuxPrefix)
+            putExtra(SshTerminalActivity.EXTRA_USE_MOSH, profile.useMosh)
+            putExtra(SshTerminalActivity.EXTRA_MOSH_LOCALE, profile.moshLocale)
         }
         startActivity(intent)
     }
@@ -716,6 +991,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun badgePill(label: String, bg: Int, fg: Int) = TextView(this).apply {
+        val dp = resources.displayMetrics.density
+        text = label
+        textSize = 11f
+        typeface = Typeface.MONOSPACE
+        setTextColor(fg)
+        setPadding((8 * dp).toInt(), (3 * dp).toInt(), (8 * dp).toInt(), (3 * dp).toInt())
+        background = cardDrawable(bg, borderCard, 8)
+    }
+
     private fun pillButton(
         label: String, bg: Int, fg: Int, fill: Boolean = false, onClick: () -> Unit
     ) = TextView(this).apply {
@@ -734,6 +1019,7 @@ class MainActivity : AppCompatActivity() {
         val dp = resources.displayMetrics.density
         fun px(v: Int) = (v * dp).toInt()
         list.removeAllViews()
+        refreshStats()
 
         val profiles = store.profiles()
         if (profiles.isEmpty()) {
