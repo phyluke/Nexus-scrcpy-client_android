@@ -19,16 +19,18 @@ import androidx.core.view.WindowCompat
 import dev.minimal.scrcpyclient.adb.AdbKeyStore
 import dev.minimal.scrcpyclient.adb.AdbToolkit
 import dev.minimal.scrcpyclient.data.AppStore
-import java.util.Locale
+import java.io.InputStreamReader
 
-/** Full-screen ADB shell terminal view for a target wireless ADB device. */
+/** Full-screen ADB shell terminal view supporting `devices`, persistent `shell:`, and single commands. */
 class AdbShellActivity : AppCompatActivity() {
 
     private lateinit var keys: AdbKeyStore
     private lateinit var outputView: TextView
     private lateinit var outputScroll: ScrollView
     private lateinit var commandInput: EditText
+    private var liveShell: AdbToolkit.InteractiveShellSession? = null
     @Volatile private var running = false
+    @Volatile private var liveShellActive = false
 
     private var host: String = ""
     private var port: Int = 5555
@@ -76,14 +78,14 @@ class AdbShellActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = px(10) }
+                ).apply { marginEnd = px(8) }
             })
 
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 addView(TextView(context).apply {
-                    text = "ADB Shell — $label"
+                    text = "ADB Shell - $label"
                     textSize = 18f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(textPrimary)
@@ -97,7 +99,9 @@ class AdbShellActivity : AppCompatActivity() {
                 })
             })
 
-            addView(pillButton("Copy", btnNeutral, textSecondary) { copyOutput() }.apply {
+            addView(pillButton("Live Shell", accentBlue, Color.WHITE, fill = true) {
+                startLiveShell()
+            }.apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -109,13 +113,13 @@ class AdbShellActivity : AppCompatActivity() {
         }
 
         val presets = listOf(
+            "devices" to "devices",
+            "shell" to "shell",
             "Device Info" to "echo MODEL=\$(getprop ro.product.model); echo ANDROID=\$(getprop ro.build.version.release); wm size",
             "Battery" to "dumpsys battery | grep -E 'level|status|temperature'",
             "IP / Net" to "ip -4 addr show wlan0",
             "ps -A" to "ps -A | head -n 30",
             "3P Apps" to "pm list packages -3",
-            "Home" to "input keyevent 3",
-            "Power" to "input keyevent 26",
         )
         val presetStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -154,7 +158,7 @@ class AdbShellActivity : AppCompatActivity() {
         }
 
         commandInput = EditText(this).apply {
-            hint = "Enter ADB shell command..."
+            hint = "Try `devices`, `shell`, or any shell command..."
             setHintTextColor(textMuted)
             setTextColor(textPrimary)
             textSize = 13f
@@ -184,6 +188,13 @@ class AdbShellActivity : AppCompatActivity() {
             if (cmd.isNotEmpty()) executeCommand(cmd)
         }
 
+        val copyBtn = pillButton("Copy", btnNeutral, textSecondary) { copyOutput() }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = px(6) }
+        }
+
         val inputBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -193,6 +204,7 @@ class AdbShellActivity : AppCompatActivity() {
             )
             addView(commandInput)
             addView(sendBtn)
+            addView(copyBtn)
         }
 
         val root = LinearLayout(this).apply {
@@ -212,11 +224,72 @@ class AdbShellActivity : AppCompatActivity() {
         if (host.isEmpty()) {
             appendLine("No ADB host configured. Go back, select or add a device, and tap Enter Shell.")
         } else {
-            appendLine("Full ADB Shell ready for $label ($host:$port).")
+            appendLine("ADB Shell ready for $label ($host:$port). Type `devices` or `shell` or tap Live Shell.")
         }
     }
 
+    private fun startLiveShell() {
+        if (host.isEmpty()) {
+            appendLine("No ADB host configured.")
+            return
+        }
+        closeLiveShell()
+        appendLine("\n$ $host:$port > adb shell (interactive stream)")
+        Thread {
+            try {
+                val active = AdbToolkit.openInteractiveShell(keys, host, port) { msg ->
+                    appendLine(msg)
+                }
+                liveShell = active
+                liveShellActive = true
+                appendLine("Connected to interactive shell. Type commands below and press Run.")
+                val reader = InputStreamReader(active.input, Charsets.UTF_8)
+                val buf = CharArray(1024)
+                while (liveShellActive) {
+                    val n = reader.read(buf)
+                    if (n < 0) break
+                    val text = String(buf, 0, n).replace("\r\n", "\n")
+                    appendChunk(text)
+                }
+                appendLine("\n[Interactive shell closed]")
+            } catch (e: Exception) {
+                appendLine("ERROR: ${e.javaClass.simpleName}: ${e.message}")
+            } finally {
+                liveShellActive = false
+            }
+        }.start()
+    }
+
     private fun executeCommand(cmd: String) {
+        commandInput.setText("")
+        val normalized = cmd.trim()
+        if (normalized == "devices" || normalized == "adb devices") {
+            appendLine("\n$ $normalized")
+            Thread {
+                AdbToolkit.listConfiguredDevices(applicationContext) { line ->
+                    appendLine(line)
+                }
+            }.start()
+            return
+        }
+        if (normalized == "shell" || normalized == "adb shell") {
+            startLiveShell()
+            return
+        }
+
+        val active = liveShell
+        if (liveShellActive && active != null) {
+            appendChunk("\n$normalized\n")
+            Thread {
+                try {
+                    active.sendCommand(normalized)
+                } catch (e: Exception) {
+                    appendLine("ERROR: ${e.javaClass.simpleName}: ${e.message}")
+                }
+            }.start()
+            return
+        }
+
         if (host.isEmpty()) {
             appendLine("No ADB host configured.")
             return
@@ -226,11 +299,10 @@ class AdbShellActivity : AppCompatActivity() {
             return
         }
         running = true
-        val promptHost = if (host.isNotEmpty()) "$host:$port" else "adb"
-        appendLine("\n$ $promptHost > $cmd")
+        appendLine("\n$ $host:$port > $normalized")
         Thread {
             try {
-                AdbToolkit.runShell(keys, host, port, cmd) { line ->
+                AdbToolkit.runShell(keys, host, port, normalized) { line ->
                     appendLine(line)
                 }
             } catch (e: Exception) {
@@ -242,8 +314,12 @@ class AdbShellActivity : AppCompatActivity() {
     }
 
     private fun appendLine(line: String) {
+        appendChunk(line + "\n")
+    }
+
+    private fun appendChunk(chunk: String) {
         runOnUiThread {
-            outputView.append(line + "\n")
+            outputView.append(chunk)
             outputScroll.post { outputScroll.fullScroll(ScrollView.FOCUS_DOWN) }
         }
     }
@@ -252,6 +328,20 @@ class AdbShellActivity : AppCompatActivity() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("Nexus ADB Shell", outputView.text.toString()))
         appendLine("[Copied shell output to clipboard]")
+    }
+
+    private fun closeLiveShell() {
+        liveShellActive = false
+        val current = liveShell
+        liveShell = null
+        if (current != null) {
+            Thread { current.close() }.start()
+        }
+    }
+
+    override fun onDestroy() {
+        closeLiveShell()
+        super.onDestroy()
     }
 
     private fun cardDrawable(fill: Int, stroke: Int, radiusDp: Int): GradientDrawable {
@@ -272,7 +362,7 @@ class AdbShellActivity : AppCompatActivity() {
         setTypeface(null, Typeface.BOLD)
         setTextColor(fg)
         gravity = Gravity.CENTER
-        setPadding((12 * dp).toInt(), (9 * dp).toInt(), (12 * dp).toInt(), (9 * dp).toInt())
+        setPadding((11 * dp).toInt(), (8 * dp).toInt(), (11 * dp).toInt(), (8 * dp).toInt())
         background = cardDrawable(
             bg,
             if (fill && bg == accentGreen) Color.parseColor("#2EA043") else if (fill && bg == accentBlue) Color.parseColor("#388BFD") else borderCard,

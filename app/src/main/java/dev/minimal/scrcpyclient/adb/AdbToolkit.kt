@@ -1,15 +1,86 @@
 package dev.minimal.scrcpyclient.adb
 
+import android.content.Context
+import dev.minimal.scrcpyclient.data.AppStore
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
 import io.github.muntashirakon.adb.AdbStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 
-/** Full ADB toolkit over libadb-android: shell commands, TCP/Wireless ADB, sync file push, and APK install. */
+/** Full ADB toolkit over libadb-android: shell commands, interactive shell, TCP/Wireless ADB, sync push, and APK install. */
 object AdbToolkit {
+
+    class InteractiveShellSession(
+        private val mgr: AbsAdbConnectionManager,
+        private val stream: AdbStream,
+        val input: InputStream,
+        val output: OutputStream,
+    ) {
+        fun sendCommand(line: String) {
+            output.write((line + "\n").toByteArray(Charsets.UTF_8))
+            output.flush()
+        }
+
+        fun sendBytes(bytes: ByteArray) {
+            output.write(bytes)
+            output.flush()
+        }
+
+        fun close() {
+            runCatching { stream.close() }
+            runCatching { mgr.disconnect() }
+        }
+    }
+
+    fun openInteractiveShell(
+        keys: AdbKeyStore,
+        host: String,
+        port: Int,
+        log: (String) -> Unit = {},
+    ): InteractiveShellSession {
+        val mgr = AdbManager(keys)
+        log("Connecting to $host:$port ...")
+        if (!mgr.connect(host, port)) {
+            runCatching { mgr.disconnect() }
+            throw IOException("ADB connect failed to $host:$port")
+        }
+        return try {
+            val stream = mgr.openStream("shell:")
+            InteractiveShellSession(
+                mgr = mgr,
+                stream = stream,
+                input = stream.openInputStream(),
+                output = stream.openOutputStream(),
+            )
+        } catch (e: Exception) {
+            runCatching { mgr.disconnect() }
+            throw e
+        }
+    }
+
+    fun listConfiguredDevices(context: Context, onLine: (String) -> Unit = {}): String {
+        val profiles = AppStore(context).profiles()
+        val sb = StringBuilder()
+        sb.appendLine("List of configured ADB targets")
+        if (profiles.isEmpty()) {
+            val line = "(no devices configured in Nexus)"
+            onLine(line)
+            sb.appendLine(line)
+            return sb.toString()
+        }
+        for (p in profiles) {
+            val reachable = testTcpPort(p.host, p.port, timeoutMs = 1500)
+            val state = if (reachable) "device" else "offline"
+            val line = "${p.host}:${p.port}\t$state (${p.label})"
+            onLine(line)
+            sb.appendLine(line)
+        }
+        return sb.toString()
+    }
 
     fun testTcpPort(host: String, port: Int, timeoutMs: Int = 3000): Boolean =
         try {
@@ -57,18 +128,25 @@ object AdbToolkit {
                 val buf = ByteArray(4096)
                 val lineBuf = StringBuilder()
                 val inp = s.openInputStream()
-                while (true) {
-                    val read = inp.read(buf)
-                    if (read < 0) break
-                    out.write(buf, 0, read)
-                    val chunk = String(buf, 0, read, Charsets.UTF_8)
-                    for (ch in chunk) {
-                        if (ch == '\n') {
-                            onLine(lineBuf.toString().trimEnd('\r'))
-                            lineBuf.clear()
-                        } else {
-                            lineBuf.append(ch)
+                try {
+                    while (true) {
+                        val read = inp.read(buf)
+                        if (read < 0) break
+                        out.write(buf, 0, read)
+                        val chunk = String(buf, 0, read, Charsets.UTF_8)
+                        for (ch in chunk) {
+                            if (ch == '\n') {
+                                onLine(lineBuf.toString().trimEnd('\r'))
+                                lineBuf.clear()
+                            } else {
+                                lineBuf.append(ch)
+                            }
                         }
+                    }
+                } catch (e: IOException) {
+                    val msg = e.message.orEmpty()
+                    if (!msg.contains("closed", ignoreCase = true) && !msg.contains("EOF", ignoreCase = true)) {
+                        throw e
                     }
                 }
                 if (lineBuf.isNotEmpty()) {
