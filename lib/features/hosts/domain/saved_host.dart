@@ -1,4 +1,6 @@
-import 'package:conduit/features/snippets/domain/terminal_snippet.dart';
+﻿import 'package:conduit/features/snippets/domain/terminal_snippet.dart';
+
+enum MachineProtocol { ssh, adb, scrcpy }
 
 enum SshAuthMethod { password, privateKey, hardwareKey, external }
 
@@ -6,6 +8,8 @@ enum TmuxPrefixKey { controlB, controlA }
 
 const defaultTmuxPrefixKey = TmuxPrefixKey.controlB;
 const defaultTmuxSessionName = 'conduit';
+const defaultSshPort = 22;
+const defaultAdbPort = 5555;
 
 bool _parseStartTmuxOnConnect(Map<String, Object?> json) {
   return json['startTmuxOnConnect'] as bool? ?? false;
@@ -130,6 +134,7 @@ class SavedHost {
     required this.port,
     required this.username,
     required this.authMethod,
+    this.protocol = MachineProtocol.ssh,
     this.password = '',
     this.askPasswordEachTime = false,
     this.privateKey = '',
@@ -171,6 +176,7 @@ class SavedHost {
   final int port;
   final String username;
   final SshAuthMethod authMethod;
+  final MachineProtocol protocol;
   final String password;
   final bool askPasswordEachTime;
   final String privateKey;
@@ -193,6 +199,9 @@ class SavedHost {
   final DateTime? lastConnectedAt;
   final bool isLocal;
 
+  bool get usesAdb =>
+      protocol == MachineProtocol.adb || protocol == MachineProtocol.scrcpy;
+
   bool get isValid =>
       id.isNotEmpty &&
       name.trim().isNotEmpty &&
@@ -201,15 +210,17 @@ class SavedHost {
       port <= 65535 &&
       connectionTimeoutSeconds >= 3 &&
       connectionTimeoutSeconds <= 120 &&
-      switch (authMethod) {
-        SshAuthMethod.password => askPasswordEachTime || password.isNotEmpty,
-        SshAuthMethod.privateKey => privateKey.trim().isNotEmpty,
-        SshAuthMethod.hardwareKey =>
-          hardwareKeys.isNotEmpty
-              ? hardwareKeys.every((key) => key.isValid)
-              : privateKey.trim().isNotEmpty,
-        SshAuthMethod.external => true,
-      };
+      (usesAdb ||
+          switch (authMethod) {
+            SshAuthMethod.password =>
+              askPasswordEachTime || password.isNotEmpty,
+            SshAuthMethod.privateKey => privateKey.trim().isNotEmpty,
+            SshAuthMethod.hardwareKey =>
+              hardwareKeys.isNotEmpty
+                  ? hardwareKeys.every((key) => key.isValid)
+                  : privateKey.trim().isNotEmpty,
+            SshAuthMethod.external => true,
+          });
 
   /// Hardware-key stubs to authenticate with, tolerating hosts created
   /// before multi-key support that only carry the legacy single-stub fields.
@@ -230,8 +241,11 @@ class SavedHost {
   }
 
   String get endpoint {
-    final trimmedUsername = username.trim();
     final trimmedHost = host.trim();
+    if (usesAdb) {
+      return '$trimmedHost:$port';
+    }
+    final trimmedUsername = username.trim();
     if (trimmedUsername.isEmpty) {
       return '$trimmedHost:$port';
     }
@@ -245,6 +259,7 @@ class SavedHost {
     int? port,
     String? username,
     SshAuthMethod? authMethod,
+    MachineProtocol? protocol,
     String? password,
     bool? askPasswordEachTime,
     String? privateKey,
@@ -275,6 +290,7 @@ class SavedHost {
       port: port ?? this.port,
       username: username ?? this.username,
       authMethod: authMethod ?? this.authMethod,
+      protocol: protocol ?? this.protocol,
       password: password ?? this.password,
       askPasswordEachTime: askPasswordEachTime ?? this.askPasswordEachTime,
       privateKey: privateKey ?? this.privateKey,
@@ -314,6 +330,7 @@ class SavedHost {
       'port': port,
       'username': username,
       'authMethod': authMethod.name,
+      'protocol': protocol.name,
       // When asking every time, the password is never persisted.
       'password': askPasswordEachTime ? '' : password,
       'askPasswordEachTime': askPasswordEachTime,
@@ -348,6 +365,10 @@ class SavedHost {
       (method) => method.name == json['authMethod'],
       orElse: () => SshAuthMethod.password,
     );
+    final protocol = MachineProtocol.values.firstWhere(
+      (item) => item.name == json['protocol'],
+      orElse: () => MachineProtocol.ssh,
+    );
     final lastConnectedAtRaw = json['lastConnectedAt'] as String?;
 
     final tags = (json['tags'] as List? ?? const [])
@@ -360,9 +381,10 @@ class SavedHost {
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
       host: json['host'] as String? ?? '',
-      port: json['port'] as int? ?? 22,
+      port: json['port'] as int? ?? defaultSshPort,
       username: json['username'] as String? ?? '',
       authMethod: authMethod,
+      protocol: protocol,
       password: (json['askPasswordEachTime'] as bool? ?? false)
           ? ''
           : json['password'] as String? ?? '',
@@ -402,3 +424,4 @@ class SavedHost {
     );
   }
 }
+

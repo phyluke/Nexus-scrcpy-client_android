@@ -4,6 +4,7 @@ import 'package:conduit/core/presentation/conduit_brand.dart';
 import 'package:conduit/core/presentation/system_navigation_insets.dart';
 import 'package:conduit/core/presentation/theme_sheet.dart';
 import 'package:conduit/core/theme/theme_controller.dart';
+import 'package:conduit/features/adb/data/nexus_adb_client.dart';
 import 'package:conduit/features/app_lock/presentation/app_lock_controller.dart';
 import 'package:conduit/features/backup/data/app_backup_service.dart';
 import 'package:conduit/features/hosts/domain/saved_host.dart';
@@ -49,6 +50,7 @@ class HostsPage extends StatefulWidget {
     required this.sftpRepository,
     required this.backupService,
     required this.fileExport,
+    this.adbClient = const NexusAdbClient(),
     super.key,
   });
 
@@ -63,6 +65,7 @@ class HostsPage extends StatefulWidget {
   final SftpRepository sftpRepository;
   final AppBackupService backupService;
   final FileExport fileExport;
+  final NexusAdbClient adbClient;
 
   @override
   State<HostsPage> createState() => _HostsPageState();
@@ -165,7 +168,8 @@ class _HostsPageState extends State<HostsPage> {
                             ),
                             onTrustedKeys: _openTrustedKeys,
                             onLock: _lock,
-                            onOpenSessions: widget.workspaceController.hasSessions
+                            onOpenSessions:
+                                widget.workspaceController.hasSessions
                                 ? _openTerminalWorkspace
                                 : null,
                           );
@@ -186,8 +190,9 @@ class _HostsPageState extends State<HostsPage> {
                               .workspaceController
                               .sessions
                               .map(
-                                (session) =>
-                                    localShellInstanceIdFromHostId(session.host.id),
+                                (session) => localShellInstanceIdFromHostId(
+                                  session.host.id,
+                                ),
                               )
                               .whereType<String>()
                               .toSet();
@@ -265,8 +270,8 @@ class _HostsPageState extends State<HostsPage> {
               icon: Icons.dns_outlined,
               title: 'No saved machines yet',
               message:
-                  'Add an SSH or Mosh server and Conduit will keep its '
-                  'credentials in your deviceÃ¢â‚¬â„¢s secure storage.',
+                  'Add an SSH, ADB, or scrcpy machine and Conduit will store '
+                  "its configuration in your device's secure storage.",
               actionLabel: 'Add machine',
               onAction: _openForm,
             ),
@@ -380,7 +385,7 @@ class _HostsPageState extends State<HostsPage> {
       ),
       selectedTag: _selectedTag,
       onConnect: () => _connect(host),
-      onAction: (action) => _handleHostAction(action, host),
+      onAction: (action) => unawaited(_handleHostAction(action, host)),
       onTagTap: (tag) {
         setState(() {
           _selectedTag = _selectedTag == tag ? null : tag;
@@ -424,6 +429,7 @@ class _HostsPageState extends State<HostsPage> {
           host.name.toLowerCase().contains(normalizedQuery) ||
           host.host.toLowerCase().contains(normalizedQuery) ||
           host.username.toLowerCase().contains(normalizedQuery) ||
+          host.protocol.name.toLowerCase().contains(normalizedQuery) ||
           host.tags.any((tag) => tag.toLowerCase().contains(normalizedQuery));
       return matchesTag && matchesQuery;
     }).toList();
@@ -570,8 +576,39 @@ class _HostsPageState extends State<HostsPage> {
 
   Future<void> _connect(SavedHost host) async {
     await widget.hostsController.markConnected(host);
-    widget.workspaceController.open(host);
-    await _openTerminalWorkspace();
+    if (!mounted) return;
+    switch (host.protocol) {
+      case MachineProtocol.ssh:
+        widget.workspaceController.open(host);
+        await _openTerminalWorkspace();
+      case MachineProtocol.adb:
+        await _openAdbOrScrcpySession(host);
+      case MachineProtocol.scrcpy:
+        await _launchScrcpySession(host);
+    }
+  }
+
+  Future<void> _launchScrcpySession(SavedHost host) async {
+    try {
+      await widget.adbClient.startScrcpy(
+        host: host.host.trim(),
+        port: host.port,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to start scrcpy: $e')));
+    }
+  }
+
+  Future<void> _openAdbOrScrcpySession(SavedHost host) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) =>
+          _AdbScrcpySessionSheet(host: host, adbClient: widget.adbClient),
+    );
   }
 
   Future<void> _lock() async {
@@ -641,7 +678,7 @@ class _HostsPageState extends State<HostsPage> {
     await widget.hostsController.upsert(
       base.copyWith(
         id: const Uuid().v4(),
-        name: '${host.name} Copy',
+        name: '"${host.name}" Copy',
         clearLastConnectedAt: true,
       ),
     );
@@ -652,7 +689,7 @@ class _HostsPageState extends State<HostsPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete machine?'),
-        content: Text('Conduit will forget Ã¢â‚¬Å“${host.name}Ã¢â‚¬Â.'),
+        content: Text('Conduit will forget "${host.name}".'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -674,6 +711,170 @@ class _HostsPageState extends State<HostsPage> {
   }
 }
 
+class _AdbScrcpySessionSheet extends StatefulWidget {
+  const _AdbScrcpySessionSheet({required this.host, required this.adbClient});
+
+  final SavedHost host;
+  final NexusAdbClient adbClient;
+
+  @override
+  State<_AdbScrcpySessionSheet> createState() => _AdbScrcpySessionSheetState();
+}
+
+class _AdbScrcpySessionSheetState extends State<_AdbScrcpySessionSheet> {
+  final _commandController = TextEditingController(
+    text: 'getprop ro.product.model',
+  );
+  final List<String> _logs = [];
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_connectAndProbe());
+  }
+
+  @override
+  void dispose() {
+    _commandController.dispose();
+    super.dispose();
+  }
+
+  void _clearLogs() {
+    _logs.clear();
+    setState(() {});
+  }
+
+  void _log(String line) {
+    if (!mounted) return;
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    final ss = now.second.toString().padLeft(2, '0');
+    setState(() {
+      _logs.add('[$hh:$mm:$ss] $line');
+    });
+  }
+
+  Future<void> _connectAndProbe() async {
+    setState(() => _busy = true);
+    _log(
+      'Connecting (${widget.host.protocol.name}) to ${widget.host.host}:${widget.host.port}...',
+    );
+    try {
+      final res = await widget.adbClient.testConnection(
+        host: widget.host.host.trim(),
+        port: widget.host.port,
+      );
+      final model = res.model.isEmpty ? 'unknown model' : res.model;
+      _log(
+        'Connected to ${res.host}:${res.port} ($model) [key: ${res.fingerprint}]',
+      );
+      if (widget.host.protocol == MachineProtocol.scrcpy) {
+        _log(
+          'ADB transport ready for scrcpy session on ${res.host}:${res.port}.',
+        );
+      }
+    } catch (e) {
+      _log('ADB error: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _runShell() async {
+    final cmd = _commandController.text.trim();
+    if (cmd.isEmpty) return;
+    setState(() => _busy = true);
+    _log('\$ $cmd');
+    try {
+      final out = await widget.adbClient.shell(cmd);
+      _log(out.trim().isEmpty ? '(no output)' : out.trim());
+    } catch (e) {
+      _log('Shell error: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isScrcpy = widget.host.protocol == MachineProtocol.scrcpy;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        18,
+        16,
+        18,
+        24 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${widget.host.name} (${widget.host.protocol.name.toUpperCase()})',
+            style: theme.textTheme.titleLarge,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${widget.host.host}:${widget.host.port}',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _commandController,
+                  decoration: const InputDecoration(
+                    labelText: 'ADB shell command',
+                  ),
+                  onSubmitted: (_) => _runShell(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _busy ? null : _runShell,
+                child: const Text('Run'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _connectAndProbe,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: Text(isScrcpy ? 'Check ADB link' : 'Reconnect'),
+              ),
+              const Spacer(),
+              TextButton(onPressed: _clearLogs, child: const Text('Clear')),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 110, maxHeight: 220),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                _logs.isEmpty ? 'Waiting for ADB output...' : _logs.join('\n'),
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MachineSectionHeader extends StatelessWidget {
   const _MachineSectionHeader();
 
@@ -692,7 +893,7 @@ class _MachineSectionHeader extends StatelessWidget {
         ),
         const SizedBox(height: 3),
         Text(
-          'SSH and Mosh connections you have saved.',
+          'SSH, ADB, and scrcpy machines you have saved.',
           style: theme.textTheme.bodySmall?.copyWith(
             color: colorScheme.onSurfaceVariant,
             height: 1.25,

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:conduit/core/presentation/conduit_brand.dart';
 import 'package:conduit/core/presentation/system_navigation_insets.dart';
 import 'package:conduit/core/theme/theme_controller.dart';
+import 'package:conduit/features/adb/data/nexus_adb_client.dart';
 import 'package:conduit/features/hosts/data/dartssh2_ssh_key_service.dart';
 import 'package:conduit/features/hosts/domain/saved_host.dart';
 import 'package:conduit/features/hosts/domain/ssh_key.dart';
@@ -23,13 +23,13 @@ class HostFormPage extends StatefulWidget {
     this.host,
     this.themeController,
     this.keyService = const Dartssh2SshKeyService(),
+    this.adbClient = const NexusAdbClient(),
     super.key,
   });
-
   final SavedHost? host;
   final ThemeController? themeController;
   final SshKeyService keyService;
-
+  final NexusAdbClient adbClient;
   @override
   State<HostFormPage> createState() => _HostFormPageState();
 }
@@ -38,7 +38,7 @@ class _HostFormPageState extends State<HostFormPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _hostController = TextEditingController();
-  final _portController = TextEditingController(text: '22');
+  final _portController = TextEditingController(text: '$defaultSshPort');
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _privateKeyController = TextEditingController();
@@ -52,6 +52,7 @@ class _HostFormPageState extends State<HostFormPage> {
   );
   final _tmuxStartDirectoryController = TextEditingController();
   final FocusNode _tagFocusNode = FocusNode();
+  MachineProtocol _protocol = MachineProtocol.ssh;
   SshAuthMethod _authMethod = SshAuthMethod.password;
   bool _showPassword = false;
   bool _askPasswordEachTime = false;
@@ -71,15 +72,19 @@ class _HostFormPageState extends State<HostFormPage> {
   SshKeyInspection? _keyInspection;
   Timer? _verifyTimer;
   int _verifyToken = 0;
-
+  // ADB / scrcpy key & connection test state.
+  String _adbFingerprint = '';
+  String _adbPublicKey = '';
+  bool _adbKeyLoading = false;
+  bool _testingConnection = false;
+  final List<String> _adbLogs = [];
   static const _verifyDebounce = Duration(milliseconds: 350);
-
   bool get _isEditing => widget.host != null;
-
+  bool get _usesAdb =>
+      _protocol == MachineProtocol.adb || _protocol == MachineProtocol.scrcpy;
   bool get _usesKeyAuth =>
       _authMethod == SshAuthMethod.privateKey ||
       _authMethod == SshAuthMethod.hardwareKey;
-
   @override
   void initState() {
     super.initState();
@@ -87,6 +92,7 @@ class _HostFormPageState extends State<HostFormPage> {
     _passphraseController.addListener(_recomputeKeyInspection);
     final host = widget.host;
     if (host != null) {
+      _protocol = host.protocol;
       _nameController.text = host.name;
       _hostController.text = host.host;
       _portController.text = host.port.toString();
@@ -118,11 +124,216 @@ class _HostFormPageState extends State<HostFormPage> {
       _tmuxStartDirectoryController.text = host.tmuxStartDirectory;
       _snippets = List<TerminalSnippet>.from(host.snippets);
       _connectSnippetId = host.connectSnippetId;
+    } else if (_usesAdb) {
+      _portController.text = '$defaultAdbPort';
+    }
+    if (_usesAdb) {
+      unawaited(_useDeviceAdbKeys(silent: true));
     }
     _keyInspection = _cheapPreview();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _recomputeKeyInspection();
     });
+  }
+
+  void _changeProtocol(MachineProtocol next) {
+    if (_protocol == next) return;
+    final previousPort = _portController.text.trim();
+    setState(() {
+      _protocol = next;
+      if (previousPort.isEmpty ||
+          previousPort == '$defaultSshPort' ||
+          previousPort == '$defaultAdbPort') {
+        _portController.text = next == MachineProtocol.ssh
+            ? '$defaultSshPort'
+            : '$defaultAdbPort';
+      }
+      if (_usesAdb) {
+        _useMosh = false;
+        _predictiveEchoEnabled = false;
+        _startTmuxOnConnect = false;
+      }
+    });
+    if (_usesAdb && _adbFingerprint.isEmpty) {
+      unawaited(_useDeviceAdbKeys(silent: true));
+    }
+  }
+
+  void _clearAdbLogs() {
+    _adbLogs.clear();
+    setState(() {});
+  }
+
+  void _appendAdbLog(String line) {
+    final now = DateTime.now();
+    final hh = now.hour.toString().padLeft(2, '0');
+    final mm = now.minute.toString().padLeft(2, '0');
+    final ss = now.second.toString().padLeft(2, '0');
+    setState(() {
+      _adbLogs.add('[$hh:$mm:$ss] $line');
+    });
+  }
+
+  void _handleUseDeviceAdbKeys() => unawaited(_useDeviceAdbKeys());
+  Future<void> _useDeviceAdbKeys({bool silent = false}) async {
+    setState(() => _adbKeyLoading = true);
+    try {
+      final info = await widget.adbClient.ensureKey();
+      final pub = await widget.adbClient.publicKey();
+      if (!mounted) return;
+      setState(() {
+        _adbFingerprint = info.fingerprint;
+        _adbPublicKey = pub;
+        _adbKeyLoading = false;
+      });
+      if (!silent) {
+        _appendAdbLog('Using device ADB key (${info.fingerprint})');
+        _showSnack('Using device ADB key');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _adbKeyLoading = false);
+      if (!silent) {
+        _appendAdbLog('Device key error: $e');
+        _showSnack('Failed to load device ADB key: $e');
+      }
+    }
+  }
+
+  Future<void> _generateAdbKey() async {
+    setState(() => _adbKeyLoading = true);
+    try {
+      final info = await widget.adbClient.generateKey();
+      final pub = await widget.adbClient.publicKey();
+      if (!mounted) return;
+      setState(() {
+        _adbFingerprint = info.fingerprint;
+        _adbPublicKey = pub;
+        _adbKeyLoading = false;
+      });
+      _appendAdbLog('Generated new 2048-bit RSA ADB key (${info.fingerprint})');
+      _showSnack('Generated new ADB key pair');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _adbKeyLoading = false);
+      _appendAdbLog('Generate ADB key failed: $e');
+      _showSnack('Could not generate ADB key: $e');
+    }
+  }
+
+  Future<void> _importAdbKeyFromFile() async {
+    try {
+      final pem = await pickAdbKeyFileContent();
+      if (pem == null || pem.isEmpty) return;
+      await _applyImportedAdbPem(pem);
+    } catch (e) {
+      _appendAdbLog('Import key file error: $e');
+      if (mounted) _showSnack('Could not import key file: $e');
+    }
+  }
+
+  Future<void> _importAdbKeyFromPaste() async {
+    final controller = TextEditingController();
+    final pem = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Import ADB private key (PKCS#8 PEM)'),
+        content: TextField(
+          controller: controller,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: '-----BEGIN PRIVATE KEY-----\n...',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    ).whenComplete(controller.dispose);
+    if (pem == null || pem.isEmpty) return;
+    await _applyImportedAdbPem(pem);
+  }
+
+  Future<void> _applyImportedAdbPem(String pem) async {
+    setState(() => _adbKeyLoading = true);
+    try {
+      final info = await widget.adbClient.importKeyPem(pem);
+      final pub = await widget.adbClient.publicKey();
+      if (!mounted) return;
+      setState(() {
+        _adbFingerprint = info.fingerprint;
+        _adbPublicKey = pub;
+        _adbKeyLoading = false;
+      });
+      _appendAdbLog(
+        'Imported ADB key (${info.fingerprint}) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not added to trusted hosts',
+      );
+      _showSnack('Imported ADB key without auto-trusting host');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _adbKeyLoading = false);
+      _appendAdbLog('Import failed: $e');
+      _showSnack('Import failed: $e');
+    }
+  }
+
+  Future<void> _copyAdbPublicKey() async {
+    if (_adbPublicKey.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: _adbPublicKey));
+    if (mounted) _showSnack('Copied ADB public key');
+  }
+
+  Future<void> _exportAdbPublicKey() async {
+    if (_adbPublicKey.isEmpty) return;
+    try {
+      final saved = await exportAdbPublicKeyFile(_adbPublicKey);
+      if (mounted && saved != null) {
+        _appendAdbLog('Exported adbkey.pub');
+        _showSnack('Exported adbkey.pub');
+      }
+    } catch (e) {
+      if (mounted) _showSnack('Export failed: $e');
+    }
+  }
+
+  Future<void> _runTestConnection() async {
+    final host = _hostController.text.trim();
+    final port = int.tryParse(_portController.text.trim());
+    if (host.isEmpty) {
+      _appendAdbLog('Error: Host or IP is required before testing.');
+      _showSnack('Enter a Host or IP first');
+      return;
+    }
+    if (port == null || port < 1 || port > 65535) {
+      _appendAdbLog('Error: Port must be between 1 and 65535.');
+      _showSnack('Enter a valid port (1-65535)');
+      return;
+    }
+    setState(() => _testingConnection = true);
+    _appendAdbLog('Testing ${_protocol.name} connection to $host:$port...');
+    try {
+      final res = await widget.adbClient.testConnection(host: host, port: port);
+      if (!mounted) return;
+      setState(() {
+        _adbFingerprint = res.fingerprint;
+        _testingConnection = false;
+      });
+      final modelLabel = res.model.isEmpty ? 'unknown model' : res.model;
+      _appendAdbLog(
+        'Connected to ${res.host}:${res.port} ($modelLabel) [key: ${res.fingerprint}]',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _testingConnection = false);
+      _appendAdbLog('Connection failed: $e');
+    }
   }
 
   SshKeyInspection? _cheapPreview() {
@@ -235,99 +446,121 @@ class _HostFormPageState extends State<HostFormPage> {
             HostFormHeader(
               title: _isEditing ? 'Edit machine' : 'New machine',
               subtitle: _isEditing
-                  ? 'Update connection details and credentials.'
-                  : 'Connection profile and credentials.',
+                  ? 'Update protocol, connection details, and credentials.'
+                  : 'Choose protocol and connection profile.',
               onBack: () => Navigator.of(context).pop(),
             ),
             const SizedBox(height: 20),
-            HostConnectionSection(
+            _ProtocolSection(protocol: _protocol, onChanged: _changeProtocol),
+            const SizedBox(height: 14),
+            _ConnectionCard(
+              protocol: _protocol,
               nameController: _nameController,
               hostController: _hostController,
               portController: _portController,
               usernameController: _usernameController,
               requiredValidator: _required,
               portValidator: _validatePort,
+              testingConnection: _testingConnection,
+              logs: _adbLogs,
+              onTestConnection: _usesAdb ? _runTestConnection : null,
+              onClearLogs: _clearAdbLogs,
             ),
-            const SizedBox(height: 14),
-            HostAuthenticationSection(
-              authMethod: _authMethod,
-              passwordController: _passwordController,
-              privateKeyController: _privateKeyController,
-              passphraseController: _passphraseController,
-              showPassword: _showPassword,
-              askPasswordEachTime: _askPasswordEachTime,
-              showPassphrase: _showPassphrase,
-              forwardAgent: _forwardAgent,
-              externalAuthOfferKey: _externalAuthOfferKey,
-              keyInspection: _keyInspection,
-              hardwareKeys: _hardwareKeys,
-              hardwareKeyInspections: _hardwareKeyInspections,
-              hardwareKeysError: _hardwareKeysError,
-              requiredValidator: _required,
-              keyMaterialValidator: _validateKeyMaterial,
-              onAuthMethodChanged: _changeAuthMethod,
-              onTogglePasswordVisibility: () =>
-                  setState(() => _showPassword = !_showPassword),
-              onAskPasswordEachTimeChanged: (value) =>
-                  setState(() => _askPasswordEachTime = value),
-              onTogglePassphraseVisibility: () =>
-                  setState(() => _showPassphrase = !_showPassphrase),
-              onPasteKey: _pasteKey,
-              onImportKeyFile: _importKeyFile,
-              onGenerateKey: _generateKey,
-              onViewPublicKey: _viewPublicKey,
-              onAddHardwareKey: _addHardwareKey,
-              onRenameHardwareKey: _renameHardwareKey,
-              onRemoveHardwareKey: _removeHardwareKey,
-              onViewHardwareKeyPublicKey: _viewHardwareKeyPublicKey,
-              onForwardAgentChanged: (value) =>
-                  setState(() => _forwardAgent = value),
-              onExternalAuthOfferKeyChanged: (value) =>
-                  setState(() => _externalAuthOfferKey = value),
-            ),
-            const SizedBox(height: 14),
-            HostAdvancedSection(
-              tags: _tags,
-              tagController: _tagController,
-              tagFocusNode: _tagFocusNode,
-              timeoutController: _timeoutController,
-              moshLocaleController: _moshLocaleController,
-              moshPortsController: _moshPortsController,
-              tmuxSessionNameController: _tmuxSessionNameController,
-              tmuxStartDirectoryController: _tmuxStartDirectoryController,
-              useMosh: _useMosh,
-              predictiveEchoEnabled: _predictiveEchoEnabled,
-              startTmuxOnConnect: _startTmuxOnConnect,
-              tmuxPrefixKey: _tmuxPrefixKey,
-              snippets: _snippets,
-              connectSnippetId: _connectSnippetId,
-              timeoutValidator: _validateTimeout,
-              moshPortsValidator: _validateMoshPorts,
-              onAddTag: _addTag,
-              onRemoveTag: _removeTag,
-              onUseMoshChanged: (value) => setState(() {
-                _useMosh = value;
-                if (value) {
-                  _predictiveEchoEnabled = false;
-                }
-              }),
-              onPredictiveEchoChanged: (value) =>
-                  setState(() => _predictiveEchoEnabled = value),
-              onStartTmuxOnConnectChanged: (value) =>
-                  setState(() => _startTmuxOnConnect = value),
-              onTmuxPrefixKeyChanged: (value) =>
-                  setState(() => _tmuxPrefixKey = value),
-              onSnippetsChanged: (snippets) => setState(() {
-                _snippets = snippets;
-                if (!_snippets.any(
-                  (snippet) => snippet.id == _connectSnippetId,
-                )) {
-                  _connectSnippetId = '';
-                }
-              }),
-              onConnectSnippetChanged: (snippetId) =>
-                  setState(() => _connectSnippetId = snippetId),
-            ),
+            if (!_usesAdb) ...[
+              const SizedBox(height: 14),
+              HostAuthenticationSection(
+                authMethod: _authMethod,
+                passwordController: _passwordController,
+                privateKeyController: _privateKeyController,
+                passphraseController: _passphraseController,
+                showPassword: _showPassword,
+                askPasswordEachTime: _askPasswordEachTime,
+                showPassphrase: _showPassphrase,
+                forwardAgent: _forwardAgent,
+                externalAuthOfferKey: _externalAuthOfferKey,
+                keyInspection: _keyInspection,
+                hardwareKeys: _hardwareKeys,
+                hardwareKeyInspections: _hardwareKeyInspections,
+                hardwareKeysError: _hardwareKeysError,
+                requiredValidator: _required,
+                keyMaterialValidator: _validateKeyMaterial,
+                onAuthMethodChanged: _changeAuthMethod,
+                onTogglePasswordVisibility: () =>
+                    setState(() => _showPassword = !_showPassword),
+                onAskPasswordEachTimeChanged: (value) =>
+                    setState(() => _askPasswordEachTime = value),
+                onTogglePassphraseVisibility: () =>
+                    setState(() => _showPassphrase = !_showPassphrase),
+                onPasteKey: _pasteKey,
+                onImportKeyFile: _importKeyFile,
+                onGenerateKey: _generateKey,
+                onViewPublicKey: _viewPublicKey,
+                onAddHardwareKey: _addHardwareKey,
+                onRenameHardwareKey: _renameHardwareKey,
+                onRemoveHardwareKey: _removeHardwareKey,
+                onViewHardwareKeyPublicKey: _viewHardwareKeyPublicKey,
+                onForwardAgentChanged: (value) =>
+                    setState(() => _forwardAgent = value),
+                onExternalAuthOfferKeyChanged: (value) =>
+                    setState(() => _externalAuthOfferKey = value),
+              ),
+              const SizedBox(height: 14),
+              HostAdvancedSection(
+                tags: _tags,
+                tagController: _tagController,
+                tagFocusNode: _tagFocusNode,
+                timeoutController: _timeoutController,
+                moshLocaleController: _moshLocaleController,
+                moshPortsController: _moshPortsController,
+                tmuxSessionNameController: _tmuxSessionNameController,
+                tmuxStartDirectoryController: _tmuxStartDirectoryController,
+                useMosh: _useMosh,
+                predictiveEchoEnabled: _predictiveEchoEnabled,
+                startTmuxOnConnect: _startTmuxOnConnect,
+                tmuxPrefixKey: _tmuxPrefixKey,
+                snippets: _snippets,
+                connectSnippetId: _connectSnippetId,
+                timeoutValidator: _validateTimeout,
+                moshPortsValidator: _validateMoshPorts,
+                onAddTag: _addTag,
+                onRemoveTag: _removeTag,
+                onUseMoshChanged: (value) => setState(() {
+                  _useMosh = value;
+                  if (value) {
+                    _predictiveEchoEnabled = false;
+                  }
+                }),
+                onPredictiveEchoChanged: (value) =>
+                    setState(() => _predictiveEchoEnabled = value),
+                onStartTmuxOnConnectChanged: (value) =>
+                    setState(() => _startTmuxOnConnect = value),
+                onTmuxPrefixKeyChanged: (value) =>
+                    setState(() => _tmuxPrefixKey = value),
+                onSnippetsChanged: (snippets) => setState(() {
+                  _snippets = snippets;
+                  if (!_snippets.any(
+                    (snippet) => snippet.id == _connectSnippetId,
+                  )) {
+                    _connectSnippetId = '';
+                  }
+                }),
+                onConnectSnippetChanged: (snippetId) =>
+                    setState(() => _connectSnippetId = snippetId),
+              ),
+            ] else ...[
+              const SizedBox(height: 14),
+              _AdbKeySection(
+                loading: _adbKeyLoading,
+                fingerprint: _adbFingerprint,
+                publicKey: _adbPublicKey,
+                onUseDeviceKeys: _handleUseDeviceAdbKeys,
+                onGenerateKeys: _generateAdbKey,
+                onImportKeyFile: _importAdbKeyFromFile,
+                onImportKeyPaste: _importAdbKeyFromPaste,
+                onCopyPublicKey: _copyAdbPublicKey,
+                onExportPublicKey: _exportAdbPublicKey,
+              ),
+            ],
             const SizedBox(height: 22),
             SizedBox(
               width: double.infinity,
@@ -340,7 +573,7 @@ class _HostFormPageState extends State<HostFormPage> {
             const SizedBox(height: 12),
             Center(
               child: Text(
-                'Stored on-device only • never synced to the cloud',
+                'Stored on-device only ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ never synced to the cloud',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -350,7 +583,6 @@ class _HostFormPageState extends State<HostFormPage> {
         ),
       ),
     );
-
     return Scaffold(
       body: palette == null
           ? body
@@ -674,52 +906,56 @@ class _HostFormPageState extends State<HostFormPage> {
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-
-    if (_authMethod == SshAuthMethod.hardwareKey && _hardwareKeys.isEmpty) {
+    if (!_usesAdb &&
+        _authMethod == SshAuthMethod.hardwareKey &&
+        _hardwareKeys.isEmpty) {
       setState(() {
         _hardwareKeysError = 'Add at least one hardware key.';
       });
       return;
     }
-
     if (_tagController.text.trim().isNotEmpty) {
       _addTag(_tagController.text);
     }
-
     final currentHost = widget.host;
     final savedHost = SavedHost(
       id: currentHost?.id ?? const Uuid().v4(),
       name: _nameController.text.trim(),
       host: _hostController.text.trim(),
       port: int.parse(_portController.text),
-      username: _usernameController.text.trim(),
-      authMethod: _authMethod,
+      username: _usesAdb ? '' : _usernameController.text.trim(),
+      authMethod: _usesAdb ? SshAuthMethod.external : _authMethod,
+      protocol: _protocol,
       password:
-          _authMethod == SshAuthMethod.password && !_askPasswordEachTime
+          !_usesAdb &&
+              _authMethod == SshAuthMethod.password &&
+              !_askPasswordEachTime
           ? _passwordController.text
           : '',
       askPasswordEachTime:
-          _authMethod == SshAuthMethod.password && _askPasswordEachTime,
-      privateKey: _authMethod == SshAuthMethod.privateKey
+          !_usesAdb &&
+          _authMethod == SshAuthMethod.password &&
+          _askPasswordEachTime,
+      privateKey: !_usesAdb && _authMethod == SshAuthMethod.privateKey
           ? _privateKeyController.text
           : '',
-      passphrase: _authMethod == SshAuthMethod.privateKey
+      passphrase: !_usesAdb && _authMethod == SshAuthMethod.privateKey
           ? _passphraseController.text
           : '',
-      hardwareKeys: _authMethod == SshAuthMethod.hardwareKey
+      hardwareKeys: !_usesAdb && _authMethod == SshAuthMethod.hardwareKey
           ? List<HardwareKeyEntry>.unmodifiable(_hardwareKeys)
           : const [],
       externalAuthOfferKey: _externalAuthOfferKey,
-      forwardAgent: _usesKeyAuth && _forwardAgent,
+      forwardAgent: !_usesAdb && _usesKeyAuth && _forwardAgent,
       tags: _tags,
       connectionTimeoutSeconds: int.parse(_timeoutController.text),
-      useMosh: _useMosh,
+      useMosh: !_usesAdb && _useMosh,
       moshLocale: _moshLocaleController.text.trim().isEmpty
           ? 'C.UTF-8'
           : _moshLocaleController.text.trim(),
-      moshPorts: _useMosh ? _moshPortsController.text.trim() : '',
-      predictiveEchoEnabled: _predictiveEchoEnabled,
-      startTmuxOnConnect: _startTmuxOnConnect,
+      moshPorts: !_usesAdb && _useMosh ? _moshPortsController.text.trim() : '',
+      predictiveEchoEnabled: !_usesAdb && _predictiveEchoEnabled,
+      startTmuxOnConnect: !_usesAdb && _startTmuxOnConnect,
       tmuxPrefixKey: _tmuxPrefixKey,
       tmuxSessionName: _tmuxSessionNameController.text.trim().isEmpty
           ? defaultTmuxSessionName
@@ -730,9 +966,7 @@ class _HostFormPageState extends State<HostFormPage> {
           _snippets.any((snippet) => snippet.id == _connectSnippetId)
           ? _connectSnippetId
           : '',
-      lastConnectedAt: currentHost?.lastConnectedAt,
     );
-
     Navigator.of(context).pop(savedHost);
   }
 
@@ -780,5 +1014,304 @@ class _HostFormPageState extends State<HostFormPage> {
       return 'Use a port or low:high range within 1-65535.';
     }
     return null;
+  }
+}
+
+class _ProtocolSection extends StatelessWidget {
+  const _ProtocolSection({required this.protocol, required this.onChanged});
+  final MachineProtocol protocol;
+  final ValueChanged<MachineProtocol> onChanged;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Protocol', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 10),
+          SegmentedButton<MachineProtocol>(
+            segments: const [
+              ButtonSegment(
+                value: MachineProtocol.ssh,
+                label: Text('SSH'),
+                icon: Icon(Icons.terminal_rounded),
+              ),
+              ButtonSegment(
+                value: MachineProtocol.adb,
+                label: Text('ADB'),
+                icon: Icon(Icons.adb_rounded),
+              ),
+              ButtonSegment(
+                value: MachineProtocol.scrcpy,
+                label: Text('scrcpy'),
+                icon: Icon(Icons.cast_connected_rounded),
+              ),
+            ],
+            selected: {protocol},
+            onSelectionChanged: (selection) {
+              if (selection.isNotEmpty) onChanged(selection.first);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConnectionCard extends StatelessWidget {
+  const _ConnectionCard({
+    required this.protocol,
+    required this.nameController,
+    required this.hostController,
+    required this.portController,
+    required this.usernameController,
+    required this.requiredValidator,
+    required this.portValidator,
+    required this.testingConnection,
+    required this.logs,
+    required this.onTestConnection,
+    required this.onClearLogs,
+  });
+  final MachineProtocol protocol;
+  final TextEditingController nameController;
+  final TextEditingController hostController;
+  final TextEditingController portController;
+  final TextEditingController usernameController;
+  final String? Function(String?) requiredValidator;
+  final String? Function(String?) portValidator;
+  final bool testingConnection;
+  final List<String> logs;
+  final VoidCallback? onTestConnection;
+  final VoidCallback onClearLogs;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isAdbOrScrcpy =
+        protocol == MachineProtocol.adb || protocol == MachineProtocol.scrcpy;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Connection', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: nameController,
+            validator: requiredValidator,
+            decoration: const InputDecoration(
+              labelText: 'Display name',
+              hintText: 'Device or server label',
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextFormField(
+                  controller: hostController,
+                  validator: requiredValidator,
+                  decoration: const InputDecoration(
+                    labelText: 'Host or IP',
+                    hintText: 'Enter IP or hostname',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextFormField(
+                  controller: portController,
+                  validator: portValidator,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Port',
+                    hintText: isAdbOrScrcpy
+                        ? '$defaultAdbPort'
+                        : '$defaultSshPort',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (!isAdbOrScrcpy) ...[
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: usernameController,
+              validator: requiredValidator,
+              decoration: const InputDecoration(labelText: 'Username'),
+            ),
+          ] else ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: testingConnection ? null : onTestConnection,
+                  icon: testingConnection
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.network_check_rounded, size: 18),
+                  label: Text(
+                    testingConnection ? 'Testing...' : 'Test connection',
+                  ),
+                ),
+                const Spacer(),
+                if (logs.isNotEmpty)
+                  TextButton(
+                    onPressed: onClearLogs,
+                    child: const Text('Clear logs'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(minHeight: 84, maxHeight: 170),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: colorScheme.outlineVariant),
+              ),
+              child: logs.isEmpty
+                  ? Text(
+                      'Logs will appear here when you test connection.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      child: SelectableText(
+                        logs.join('\n'),
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AdbKeySection extends StatelessWidget {
+  const _AdbKeySection({
+    required this.loading,
+    required this.fingerprint,
+    required this.publicKey,
+    required this.onUseDeviceKeys,
+    required this.onGenerateKeys,
+    required this.onImportKeyFile,
+    required this.onImportKeyPaste,
+    required this.onCopyPublicKey,
+    required this.onExportPublicKey,
+  });
+  final bool loading;
+  final String fingerprint;
+  final String publicKey;
+  final VoidCallback onUseDeviceKeys;
+  final VoidCallback onGenerateKeys;
+  final VoidCallback onImportKeyFile;
+  final VoidCallback onImportKeyPaste;
+  final VoidCallback onCopyPublicKey;
+  final VoidCallback onExportPublicKey;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('ADB Key', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'Imported keys are stored for ADB/scrcpy auth only and never '
+            'auto-trust any host.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: loading ? null : onImportKeyFile,
+                icon: const Icon(Icons.file_open_outlined, size: 18),
+                label: const Text('Import keys'),
+              ),
+              OutlinedButton.icon(
+                onPressed: loading ? null : onGenerateKeys,
+                icon: const Icon(Icons.vpn_key_rounded, size: 18),
+                label: const Text('Generate keys'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: loading ? null : onUseDeviceKeys,
+                icon: const Icon(Icons.phonelink_lock_rounded, size: 18),
+                label: const Text('Use device keys'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('Active key fingerprint', style: theme.textTheme.labelMedium),
+          const SizedBox(height: 4),
+          SelectableText(
+            fingerprint.isEmpty ? 'Not loaded yet' : fingerprint,
+            style: const TextStyle(fontFamily: 'monospace'),
+          ),
+          if (publicKey.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: onImportKeyPaste,
+                  icon: const Icon(Icons.paste_rounded, size: 16),
+                  label: const Text('Paste PEM'),
+                ),
+                TextButton.icon(
+                  onPressed: onCopyPublicKey,
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('Copy pubkey'),
+                ),
+                TextButton.icon(
+                  onPressed: onExportPublicKey,
+                  icon: const Icon(Icons.download_rounded, size: 16),
+                  label: const Text('Export adbkey.pub'),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }

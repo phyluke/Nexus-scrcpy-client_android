@@ -1,4 +1,4 @@
-package com.phyluke.conduit.adb
+﻿package com.phyluke.conduit.adb
 
 import android.content.Context
 import android.os.Handler
@@ -19,10 +19,22 @@ class NexusAdbBridge(private val context: Context) {
         when (call.method) {
             "ensureKey" -> runAsync(result) {
                 keyStore.ensureKey()
-                mapOf(
-                    "hasKey" to keyStore.hasKey(),
-                    "fingerprint" to keyStore.fingerprint(),
-                )
+                keyStatePayload()
+            }
+            "generateKey" -> runAsync(result) {
+                keyStore.generate()
+                keyStatePayload()
+            }
+            "importKey" -> {
+                val pem = call.argument<String>("pem")?.trim().orEmpty()
+                if (pem.isEmpty()) {
+                    result.error("bad_arguments", "Private key PEM is required.", null)
+                    return
+                }
+                runAsync(result) {
+                    keyStore.importPrivateKeyPem(pem)
+                    keyStatePayload()
+                }
             }
             "publicKey" -> runAsync(result) {
                 keyStore.ensureKey()
@@ -36,18 +48,31 @@ class NexusAdbBridge(private val context: Context) {
                     return
                 }
                 runAsync(result) {
-                    keyStore.ensureKey()
-                    val nextManager = AdbManager(keyStore)
-                    val connected = nextManager.connect(host, port)
-                    if (!connected) {
-                        throw IllegalStateException("Failed to connect to $host:$port")
-                    }
-                    manager?.close()
-                    manager = nextManager
+                    connectInternal(host, port)
                     mapOf(
                         "connected" to true,
                         "host" to host,
                         "port" to port,
+                    )
+                }
+            }
+            "testConnection" -> {
+                val host = call.argument<String>("host")?.trim().orEmpty()
+                val port = call.argument<Int>("port") ?: 5555
+                if (host.isEmpty()) {
+                    result.error("bad_arguments", "Host is required.", null)
+                    return
+                }
+                runAsync(result) {
+                    keyStore.ensureKey()
+                    connectInternal(host, port)
+                    val model = runShellInternal("getprop ro.product.model").trim()
+                    mapOf(
+                        "connected" to true,
+                        "host" to host,
+                        "port" to port,
+                        "fingerprint" to keyStore.fingerprint(),
+                        "model" to model,
                     )
                 }
             }
@@ -58,13 +83,38 @@ class NexusAdbBridge(private val context: Context) {
                     return
                 }
                 runAsync(result) {
-                    val active = manager ?: throw IllegalStateException("Not connected to an ADB target.")
-                    val stream = active.openStream("shell:$command")
-                    stream.use { s ->
-                        BufferedReader(InputStreamReader(s.openInputStream())).use { reader ->
-                            reader.readText()
-                        }
+                    runShellInternal(command)
+                }
+            }
+            "startScrcpy" -> {
+                val host = call.argument<String>("host")?.trim().orEmpty()
+                val port = call.argument<Int>("port") ?: 5555
+                val maxSize = call.argument<Int>("maxSize") ?: 1024
+                val bitRate = call.argument<Int>("bitRate") ?: 2_500_000
+                val maxFps = call.argument<Int>("maxFps") ?: 60
+                val screenOff = call.argument<Boolean>("screenOff") ?: false
+                if (host.isEmpty()) {
+                    result.error("bad_arguments", "Host is required.", null)
+                    return
+                }
+                runAsync(result) {
+                    keyStore.ensureKey()
+                    // Release any existing standalone ADB socket before opening dedicated scrcpy session
+                    runCatching { manager?.close() }
+                    manager = null
+                    val intent = ScrcpyStreamActivity.createIntent(
+                        context = context,
+                        host = host,
+                        port = port,
+                        maxSize = maxSize,
+                        bitRate = bitRate,
+                        maxFps = maxFps,
+                        screenOff = screenOff,
+                    )
+                    mainHandler.post {
+                        context.startActivity(intent)
                     }
+                    true
                 }
             }
             "disconnect" -> runAsync(result) {
@@ -75,6 +125,32 @@ class NexusAdbBridge(private val context: Context) {
             else -> result.notImplemented()
         }
     }
+
+    private fun connectInternal(host: String, port: Int) {
+        keyStore.ensureKey()
+        val nextManager = AdbManager(keyStore)
+        val connected = nextManager.connect(host, port)
+        if (!connected) {
+            throw IllegalStateException("Failed to connect to $host:$port")
+        }
+        manager?.close()
+        manager = nextManager
+    }
+
+    private fun runShellInternal(command: String): String {
+        val active = manager ?: throw IllegalStateException("Not connected to an ADB target.")
+        val stream = active.openStream("shell:$command")
+        return stream.use { s ->
+            BufferedReader(InputStreamReader(s.openInputStream())).use { reader ->
+                reader.readText()
+            }
+        }
+    }
+
+    private fun keyStatePayload(): Map<String, Any> = mapOf(
+        "hasKey" to keyStore.hasKey(),
+        "fingerprint" to if (keyStore.hasKey()) keyStore.fingerprint() else "",
+    )
 
     private fun <T> runAsync(result: MethodChannel.Result, block: () -> T) {
         executor.execute {
