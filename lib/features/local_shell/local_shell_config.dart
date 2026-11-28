@@ -3,8 +3,7 @@ import 'package:conduit/features/local_shell/domain/rootfs_manifest.dart';
 
 const String defaultLocalShellDistroId = 'archlinux';
 
-const String _rootfsBaseUrl =
-    'https://github.com/phyluke/conduit-rootfs/releases/download/rootfs-pd-v4.37.0';
+const String _rootfsBaseUrl = 'https://easycli.sh/proot-distro';
 
 const List<String> _pacmanLocaleSetup = [
   "echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen",

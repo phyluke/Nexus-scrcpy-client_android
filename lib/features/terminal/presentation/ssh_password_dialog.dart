@@ -59,9 +59,7 @@ class _SshPasswordDialogState extends State<_SshPasswordDialog> {
           suffixIcon: IconButton(
             tooltip: _show ? 'Hide' : 'Show',
             icon: Icon(
-              _show
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined,
+              _show ? Icons.visibility_off_outlined : Icons.visibility_outlined,
             ),
             onPressed: () => setState(() => _show = !_show),
           ),

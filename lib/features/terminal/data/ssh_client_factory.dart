@@ -195,13 +195,19 @@ class SshClientFactory {
   String Function()? passwordRequestForTesting(
     SavedHost host, {
     String? password,
-  }) => _passwordRequestFor(host, _SessionPassword()..value = password ?? host.password);
+  }) => _passwordRequestFor(
+    host,
+    _SessionPassword()..value = password ?? host.password,
+  );
 
   @visibleForTesting
   SSHUserInfoRequestHandler? userInfoRequestForTesting(
     SavedHost host, {
     String? password,
-  }) => _userInfoRequestFor(host, _SessionPassword()..value = password ?? host.password);
+  }) => _userInfoRequestFor(
+    host,
+    _SessionPassword()..value = password ?? host.password,
+  );
 
   String Function()? _passwordRequestFor(
     SavedHost host,

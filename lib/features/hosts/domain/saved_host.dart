@@ -1,4 +1,4 @@
-﻿import 'package:conduit/features/snippets/domain/terminal_snippet.dart';
+import 'package:conduit/features/snippets/domain/terminal_snippet.dart';
 
 enum MachineProtocol { ssh, adb, scrcpy }
 
@@ -424,4 +424,3 @@ class SavedHost {
     );
   }
 }
-

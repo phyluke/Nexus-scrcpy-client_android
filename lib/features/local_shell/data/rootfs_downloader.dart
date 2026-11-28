@@ -78,7 +78,8 @@ class HttpRootfsDownloader implements RootfsDownloader {
     required Sha256Verifier verifier,
     required void Function(double)? onProgress,
   }) async {
-    final request = http.Request('GET', manifest.archiveUrl);
+    final request = http.Request('GET', manifest.archiveUrl)
+      ..headers['User-Agent'] = 'curl/8.5.0';
     if (existing > 0) {
       request.headers['Range'] = 'bytes=$existing-';
     }

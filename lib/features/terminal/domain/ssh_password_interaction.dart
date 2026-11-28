@@ -1,6 +1,7 @@
 import 'dart:async';
 
-typedef SshPasswordPrompt = Future<String?> Function(SshPasswordRequest request);
+typedef SshPasswordPrompt =
+    Future<String?> Function(SshPasswordRequest request);
 
 class SshPasswordRequest {
   const SshPasswordRequest({required this.endpoint, this.hostName = ''});

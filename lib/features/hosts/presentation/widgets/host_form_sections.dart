@@ -192,32 +192,33 @@ class HostAuthenticationSection extends StatelessWidget {
                 'The password is not saved. You type it each time you connect.',
               ),
               value: askPasswordEachTime,
-              onChanged: (value) => onAskPasswordEachTimeChanged(value ?? false),
+              onChanged: (value) =>
+                  onAskPasswordEachTimeChanged(value ?? false),
             ),
           ),
           if (!askPasswordEachTime)
-          TextFormField(
-            controller: passwordController,
-            decoration: InputDecoration(
-              labelText: 'Password',
-              helperText: 'Use this for password-only SSH login.',
-              helperMaxLines: 2,
-              prefixIcon: const Icon(Icons.key_outlined),
-              suffixIcon: IconButton(
-                tooltip: showPassword ? 'Hide' : 'Show',
-                icon: Icon(
-                  showPassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
+            TextFormField(
+              controller: passwordController,
+              decoration: InputDecoration(
+                labelText: 'Password',
+                helperText: 'Use this for password-only SSH login.',
+                helperMaxLines: 2,
+                prefixIcon: const Icon(Icons.key_outlined),
+                suffixIcon: IconButton(
+                  tooltip: showPassword ? 'Hide' : 'Show',
+                  icon: Icon(
+                    showPassword
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
+                  onPressed: onTogglePasswordVisibility,
                 ),
-                onPressed: onTogglePasswordVisibility,
               ),
+              obscureText: !showPassword,
+              validator: authMethod == SshAuthMethod.password
+                  ? requiredValidator
+                  : null,
             ),
-            obscureText: !showPassword,
-            validator: authMethod == SshAuthMethod.password
-                ? requiredValidator
-                : null,
-          ),
         ],
         if (authMethod == SshAuthMethod.hardwareKey) ...[
           AuthExplainer(method: authMethod),

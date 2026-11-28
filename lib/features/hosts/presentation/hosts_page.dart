@@ -219,10 +219,10 @@ class _HostsPageState extends State<HostsPage> {
               Positioned(
                 left: 0,
                 right: 0,
-                bottom: 8,
+                bottom: 24,
                 child: IgnorePointer(
                   child: Text(
-                    'powered by phyluke',
+                    'Powered by PhyLuke',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -711,196 +711,12 @@ class _HostsPageState extends State<HostsPage> {
   }
 }
 
-class _AdbScrcpySessionSheet extends StatefulWidget {
-  const _AdbScrcpySessionSheet({required this.host, required this.adbClient});
-
-  final SavedHost host;
-  final NexusAdbClient adbClient;
-
-  @override
-  State<_AdbScrcpySessionSheet> createState() => _AdbScrcpySessionSheetState();
-}
-
-class _AdbScrcpySessionSheetState extends State<_AdbScrcpySessionSheet> {
-  final _commandController = TextEditingController(
-    text: 'getprop ro.product.model',
-  );
-  final List<String> _logs = [];
-  bool _busy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_connectAndProbe());
-  }
-
-  @override
-  void dispose() {
-    _commandController.dispose();
-    super.dispose();
-  }
-
-  void _clearLogs() {
-    _logs.clear();
-    setState(() {});
-  }
-
-  void _log(String line) {
-    if (!mounted) return;
-    final now = DateTime.now();
-    final hh = now.hour.toString().padLeft(2, '0');
-    final mm = now.minute.toString().padLeft(2, '0');
-    final ss = now.second.toString().padLeft(2, '0');
-    setState(() {
-      _logs.add('[$hh:$mm:$ss] $line');
-    });
-  }
-
-  Future<void> _connectAndProbe() async {
-    setState(() => _busy = true);
-    _log(
-      'Connecting (${widget.host.protocol.name}) to ${widget.host.host}:${widget.host.port}...',
-    );
-    try {
-      final res = await widget.adbClient.testConnection(
-        host: widget.host.host.trim(),
-        port: widget.host.port,
-      );
-      final model = res.model.isEmpty ? 'unknown model' : res.model;
-      _log(
-        'Connected to ${res.host}:${res.port} ($model) [key: ${res.fingerprint}]',
-      );
-      if (widget.host.protocol == MachineProtocol.scrcpy) {
-        _log(
-          'ADB transport ready for scrcpy session on ${res.host}:${res.port}.',
-        );
-      }
-    } catch (e) {
-      _log('ADB error: $e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _runShell() async {
-    final cmd = _commandController.text.trim();
-    if (cmd.isEmpty) return;
-    setState(() => _busy = true);
-    _log('\$ $cmd');
-    try {
-      final out = await widget.adbClient.shell(cmd);
-      _log(out.trim().isEmpty ? '(no output)' : out.trim());
-    } catch (e) {
-      _log('Shell error: $e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isScrcpy = widget.host.protocol == MachineProtocol.scrcpy;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        18,
-        16,
-        18,
-        24 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${widget.host.name} (${widget.host.protocol.name.toUpperCase()})',
-            style: theme.textTheme.titleLarge,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${widget.host.host}:${widget.host.port}',
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _commandController,
-                  decoration: const InputDecoration(
-                    labelText: 'ADB shell command',
-                  ),
-                  onSubmitted: (_) => _runShell(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: _busy ? null : _runShell,
-                child: const Text('Run'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _connectAndProbe,
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: Text(isScrcpy ? 'Check ADB link' : 'Reconnect'),
-              ),
-              const Spacer(),
-              TextButton(onPressed: _clearLogs, child: const Text('Clear')),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            constraints: const BoxConstraints(minHeight: 110, maxHeight: 220),
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-            ),
-            child: SingleChildScrollView(
-              child: SelectableText(
-                _logs.isEmpty ? 'Waiting for ADB output...' : _logs.join('\n'),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _MachineSectionHeader extends StatelessWidget {
   const _MachineSectionHeader();
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Saved machines',
-          style: theme.textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          'SSH, ADB, and scrcpy machines you have saved.',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-            height: 1.25,
-          ),
-        ),
-      ],
-    );
+    return const Text('Saved machines');
   }
 }
 
@@ -917,35 +733,346 @@ class _HostSortMenu extends StatelessWidget {
       initialValue: value,
       onSelected: onChanged,
       icon: const Icon(Icons.sort_rounded),
-      itemBuilder: (context) => [
-        for (final mode in HostListSortMode.values)
-          PopupMenuItem(
-            value: mode,
-            child: Row(
-              children: [
-                Icon(mode.icon, size: 18),
-                const SizedBox(width: 10),
-                Text(mode.label),
-              ],
-            ),
-          ),
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: HostListSortMode.lastConnected,
+          child: Text('Recently connected'),
+        ),
+        PopupMenuItem(value: HostListSortMode.name, child: Text('Name (A-Z)')),
+        PopupMenuItem(value: HostListSortMode.added, child: Text('Date added')),
+        PopupMenuItem(
+          value: HostListSortMode.manual,
+          child: Text('Manual order'),
+        ),
       ],
     );
   }
 }
 
-extension on HostListSortMode {
-  String get label => switch (this) {
-    HostListSortMode.lastConnected => 'Last connected',
-    HostListSortMode.name => 'Name',
-    HostListSortMode.added => 'Added',
-    HostListSortMode.manual => 'Manual',
-  };
+class _AdbQuickKey {
+  const _AdbQuickKey({
+    required this.label,
+    required this.command,
+    required this.icon,
+  });
 
-  IconData get icon => switch (this) {
-    HostListSortMode.lastConnected => Icons.schedule_rounded,
-    HostListSortMode.name => Icons.sort_by_alpha_rounded,
-    HostListSortMode.added => Icons.playlist_add_check_rounded,
-    HostListSortMode.manual => Icons.drag_indicator_rounded,
-  };
+  final String label;
+  final String command;
+  final IconData icon;
+}
+
+class _AdbScrcpySessionSheet extends StatefulWidget {
+  const _AdbScrcpySessionSheet({required this.host, required this.adbClient});
+
+  final SavedHost host;
+  final NexusAdbClient adbClient;
+
+  @override
+  State<_AdbScrcpySessionSheet> createState() => _AdbScrcpySessionSheetState();
+}
+
+class _AdbScrcpySessionSheetState extends State<_AdbScrcpySessionSheet> {
+  static const List<_AdbQuickKey> _quickKeys = [
+    _AdbQuickKey(
+      label: 'Battery',
+      command: 'dumpsys battery',
+      icon: Icons.battery_std_rounded,
+    ),
+    _AdbQuickKey(
+      label: 'Device info',
+      command:
+          'echo "Model: \$(getprop ro.product.model)"; echo "Android: \$(getprop ro.build.version.release)"; echo "Display: \$(wm size) @ \$(wm density)dpi"; echo "Kernel: \$(uname -r)"',
+      icon: Icons.info_outline_rounded,
+    ),
+    _AdbQuickKey(
+      label: 'IP / Wi-Fi',
+      command: 'ip -4 addr show wlan0 2>/dev/null || ip addr show',
+      icon: Icons.wifi_rounded,
+    ),
+    _AdbQuickKey(
+      label: 'Processes',
+      command: 'ps -A | head -n 25',
+      icon: Icons.memory_rounded,
+    ),
+    _AdbQuickKey(
+      label: 'Storage',
+      command: 'df -h /data /sdcard 2>/dev/null || df -h',
+      icon: Icons.storage_rounded,
+    ),
+  ];
+
+  final FocusNode _terminalFocus = FocusNode();
+  final ScrollController _scrollController = ScrollController();
+  final List<String> _lines = [];
+  String _currentInput = '';
+  bool _busy = false;
+  String _promptPrefix = 'adb';
+
+  @override
+  void initState() {
+    super.initState();
+    _promptPrefix = '${widget.host.host}:${widget.host.port}';
+    unawaited(_connectAndProbe());
+  }
+
+  @override
+  void dispose() {
+    _terminalFocus.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _appendLine(String text) {
+    if (!mounted) return;
+    setState(() {
+      for (final rawLine in text.split('\n')) {
+        final cleaned = rawLine.replaceAll('\r', '');
+        if (cleaned.isNotEmpty || _lines.isEmpty) {
+          _lines.add(cleaned);
+        }
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  void _runQuickKey(_AdbQuickKey item) {
+    unawaited(_executeCommand(item.command));
+  }
+
+  void _clearTerminal() {
+    if (!mounted) return;
+    setState(_lines.clear);
+  }
+
+  Future<void> _connectAndProbe() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    _appendLine(
+      'Connecting (${widget.host.protocol.name}) to ${widget.host.host}:${widget.host.port}...',
+    );
+    try {
+      final res = await widget.adbClient.testConnection(
+        host: widget.host.host.trim(),
+        port: widget.host.port,
+      );
+      final model = res.model.isEmpty ? 'device' : res.model;
+      _promptPrefix = '$model@${res.host}:${res.port}';
+      _appendLine('Connected to ${res.host}:${res.port} ($model)');
+      if (widget.host.protocol == MachineProtocol.scrcpy) {
+        _appendLine(
+          'ADB transport ready for scrcpy session on ${res.host}:${res.port}.',
+        );
+      }
+    } catch (e) {
+      _appendLine('ADB error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+        _terminalFocus.requestFocus();
+      }
+    }
+  }
+
+  Future<void> _executeCommand(String rawCommand) async {
+    final cmd = rawCommand.trim();
+    if (cmd.isEmpty || _busy) return;
+    setState(() {
+      _busy = true;
+      _currentInput = '';
+    });
+    _appendLine('$_promptPrefix\$ $cmd');
+    try {
+      final out = await widget.adbClient.shell(cmd);
+      _appendLine(out.trim().isEmpty ? '(no output)' : out.trimRight());
+    } catch (e) {
+      _appendLine('Shell error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+        _terminalFocus.requestFocus();
+      }
+    }
+  }
+
+  void _handleHardwareKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      final cmd = _currentInput;
+      unawaited(_executeCommand(cmd));
+      return;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.backspace) {
+      if (_currentInput.isNotEmpty) {
+        setState(() {
+          _currentInput = _currentInput.substring(0, _currentInput.length - 1);
+        });
+      }
+      return;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      setState(() => _currentInput = '');
+      return;
+    }
+    final char = event.character;
+    if (char != null &&
+        char.isNotEmpty &&
+        !char.contains('\n') &&
+        !char.contains('\r')) {
+      setState(() {
+        _currentInput = '$_currentInput$char';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isScrcpy = widget.host.protocol == MachineProtocol.scrcpy;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(14, 12, 14, 14 + bottomInset),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${widget.host.name} (${widget.host.protocol.name.toUpperCase()})',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        '${widget.host.host}:${widget.host.port}',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Reconnect',
+                  onPressed: _busy ? null : _connectAndProbe,
+                  icon: const Icon(Icons.refresh_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: 'Clear terminal',
+                  onPressed: _clearTerminal,
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 36,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _quickKeys.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 6),
+                itemBuilder: (context, index) {
+                  final keyItem = _quickKeys[index];
+                  return ActionChip(
+                    avatar: Icon(keyItem.icon, size: 15),
+                    label: Text(keyItem.label),
+                    onPressed: _busy
+                        ? null
+                        : _busy
+                        ? null
+                        : () => _runQuickKey(keyItem),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            KeyboardListener(
+              focusNode: _terminalFocus,
+              autofocus: true,
+              onKeyEvent: _handleHardwareKeyEvent,
+              child: GestureDetector(
+                onTap: _terminalFocus.requestFocus,
+                child: Container(
+                  height: 240,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: colorScheme.outlineVariant),
+                  ),
+                  child: ListView(
+                    controller: _scrollController,
+                    children: [
+                      for (final line in _lines)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: SelectableText(
+                            line,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$_promptPrefix\$ ',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: colorScheme.primary,
+                            ),
+                          ),
+                          Expanded(
+                            child: Text(
+                              '$_currentInput\u258c',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                                color: colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (isScrcpy) ...[
+              const SizedBox(height: 6),
+              Text(
+                'scrcpy ADB transport session active.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }

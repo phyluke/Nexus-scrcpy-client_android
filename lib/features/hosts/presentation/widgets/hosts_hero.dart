@@ -1,4 +1,3 @@
-import 'package:conduit/core/presentation/conduit_brand.dart';
 import 'package:flutter/material.dart';
 
 class HostsHero extends StatelessWidget {
@@ -28,7 +27,13 @@ class HostsHero extends StatelessWidget {
         children: [
           Row(
             children: [
-              const ConduitGlyph(size: 30),
+              Text(
+                'Nexus',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.4,
+                ),
+              ),
               const Spacer(),
               _GhostIconButton(
                 tooltip: 'Trusted keys',

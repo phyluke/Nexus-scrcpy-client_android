@@ -273,7 +273,7 @@ class _HostFormPageState extends State<HostFormPage> {
         _adbKeyLoading = false;
       });
       _appendAdbLog(
-        'Imported ADB key (${info.fingerprint}) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not added to trusted hosts',
+        'Imported ADB key (${info.fingerprint}) - not added to trusted hosts',
       );
       _showSnack('Imported ADB key without auto-trusting host');
     } catch (e) {
@@ -573,7 +573,7 @@ class _HostFormPageState extends State<HostFormPage> {
             const SizedBox(height: 12),
             Center(
               child: Text(
-                'Stored on-device only ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ never synced to the cloud',
+                'Stored on-device only - never synced to the cloud',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),

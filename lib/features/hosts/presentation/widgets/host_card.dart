@@ -88,37 +88,32 @@ class HostCard extends StatelessWidget {
                             height: 1.25,
                           ),
                         ),
-                        if (host.tags.isNotEmpty ||
-                            host.lastConnectedAt != null) ...[
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 5,
-                            runSpacing: 5,
-                            children: [
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 5,
+                          runSpacing: 5,
+                          children: [
+                            _MetaChip(
+                              icon: _protocolIcon(host.protocol),
+                              label: host.protocol.name,
+                            ),
+                            _MetaChip(icon: authIcon, label: _authLabel(host)),
+                            for (final tag in host.tags)
                               _MetaChip(
-                                icon: authIcon,
-                                label: _authLabel(host),
+                                icon: Icons.tag_rounded,
+                                label: tag,
+                                selected: selectedTag == tag,
+                                onTap: () => onTagTap(tag),
                               ),
-                              for (final tag in host.tags)
-                                _MetaChip(
-                                  icon: Icons.tag_rounded,
-                                  label: tag,
-                                  selected: selectedTag == tag,
-                                  onTap: () => onTagTap(tag),
+                            if (host.lastConnectedAt != null)
+                              _MetaChip(
+                                icon: Icons.history_rounded,
+                                label: _lastConnectedLabel(
+                                  host.lastConnectedAt!,
                                 ),
-                              if (host.lastConnectedAt != null)
-                                _MetaChip(
-                                  icon: Icons.history_rounded,
-                                  label: _lastConnectedLabel(
-                                    host.lastConnectedAt!,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ] else ...[
-                          const SizedBox(height: 6),
-                          _MetaChip(icon: authIcon, label: _authLabel(host)),
-                        ],
+                              ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -217,6 +212,12 @@ class HostCard extends StatelessWidget {
       ),
     );
   }
+
+  IconData _protocolIcon(MachineProtocol protocol) => switch (protocol) {
+    MachineProtocol.ssh => Icons.terminal_rounded,
+    MachineProtocol.adb => Icons.adb_rounded,
+    MachineProtocol.scrcpy => Icons.cast_rounded,
+  };
 
   String _authLabel(SavedHost host) => switch (host.authMethod) {
     SshAuthMethod.password => 'Password',
