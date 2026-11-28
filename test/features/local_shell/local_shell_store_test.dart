@@ -37,12 +37,12 @@ void main() {
       await hiddenFile.writeAsString('hidden');
 
       await restricted.stat().then((_) => restricted.parent.stat());
-      await Process.run('chmod', ['000', restricted.path]);
+      if (!Platform.isWindows) { await Process.run('chmod', ['000', restricted.path]); }
       try {
         final bytes = await LocalShellStore(paths).diskUsageBytes();
         expect(bytes, greaterThanOrEqualTo(5));
       } finally {
-        await Process.run('chmod', ['700', restricted.path]);
+        if (!Platform.isWindows) { await Process.run('chmod', ['700', restricted.path]); }
       }
     });
   });

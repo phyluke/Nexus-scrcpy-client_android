@@ -182,15 +182,18 @@ class HostAuthenticationSection extends StatelessWidget {
           ),
         ],
         if (authMethod == SshAuthMethod.password) ...[
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('Ask for password when logging in'),
-            subtitle: const Text(
-              'The password is not saved. You type it each time you connect.',
+          Material(
+            color: Colors.transparent,
+            child: CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Ask for password when logging in'),
+              subtitle: const Text(
+                'The password is not saved. You type it each time you connect.',
+              ),
+              value: askPasswordEachTime,
+              onChanged: (value) => onAskPasswordEachTimeChanged(value ?? false),
             ),
-            value: askPasswordEachTime,
-            onChanged: (value) => onAskPasswordEachTimeChanged(value ?? false),
           ),
           if (!askPasswordEachTime)
           TextFormField(
