@@ -429,10 +429,6 @@ void main() {
         find.widgetWithText(TextFormField, 'Host or IP'),
         'example.com',
       );
-      await tester.enterText(
-        find.widgetWithText(TextFormField, 'Username'),
-        'root',
-      );
       await tester.tap(find.text('Private key').first);
       await tester.pumpAndSettle();
 
@@ -647,16 +643,25 @@ void main() {
           ((find.byType(Scrollable).evaluate().first as StatefulElement).state
                   as ScrollableState)
               .position;
-      listPosition.jumpTo(0);
-      await tester.pump();
-      for (var i = 0; i < 40 && finder.evaluate().isEmpty; i++) {
-        listPosition.jumpTo(
-          (listPosition.pixels + 200).clamp(0.0, listPosition.maxScrollExtent),
-        );
-        await tester.pump();
+      for (var pass = 0; pass < 2 && finder.evaluate().isEmpty; pass++) {
+        if (pass == 1) {
+          listPosition.jumpTo(0);
+          await tester.pump();
+        }
+        for (var i = 0; i < 40 && finder.evaluate().isEmpty; i++) {
+          listPosition.jumpTo(
+            (listPosition.pixels + 200).clamp(
+              0.0,
+              listPosition.maxScrollExtent,
+            ),
+          );
+          await tester.pump();
+        }
       }
-      await tester.ensureVisible(finder);
-      await tester.pumpAndSettle();
+      if (finder.evaluate().isNotEmpty) {
+        await tester.ensureVisible(finder);
+        await tester.pumpAndSettle();
+      }
     }
 
     void mockClipboard(WidgetTester tester, String text) {
@@ -688,6 +693,12 @@ void main() {
         find.widgetWithText(TextFormField, 'Host or IP'),
         'example.com',
       );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Username'),
+        'root',
+      );
+      await tester.ensureVisible(find.text('Hardware key').first);
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Hardware key').first);
       await tester.pumpAndSettle();
 
@@ -714,6 +725,8 @@ void main() {
 
       await tester.ensureVisible(find.text('Hardware key').first);
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Hardware key').first);
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Hardware key').first);
       await tester.pumpAndSettle();
 
@@ -729,6 +742,8 @@ void main() {
       mockClipboard(tester, fakeSecurityKeyPem());
       await tester.pumpWidget(const MaterialApp(home: HostFormPage()));
 
+      await tester.ensureVisible(find.text('Hardware key').first);
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Hardware key').first);
       await tester.pumpAndSettle();
       await scrollToAndTap(tester, find.text('Add hardware key'));
@@ -770,6 +785,8 @@ void main() {
     testWidgets('adds a key typed into the sheet input field', (tester) async {
       await tester.pumpWidget(const MaterialApp(home: HostFormPage()));
 
+      await tester.ensureVisible(find.text('Hardware key').first);
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Hardware key').first);
       await tester.pumpAndSettle();
       await scrollToAndTap(tester, find.text('Add hardware key'));

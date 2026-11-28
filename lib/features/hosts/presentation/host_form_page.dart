@@ -441,7 +441,7 @@ class _HostFormPageState extends State<HostFormPage> {
       child: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
+          padding: const EdgeInsets.fromLTRB(18, 6, 18, 24),
           children: [
             HostFormHeader(
               title: _isEditing ? 'Edit machine' : 'New machine',
@@ -450,9 +450,9 @@ class _HostFormPageState extends State<HostFormPage> {
                   : 'Choose protocol and connection profile.',
               onBack: () => Navigator.of(context).pop(),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
             _ProtocolSection(protocol: _protocol, onChanged: _changeProtocol),
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             _ConnectionCard(
               protocol: _protocol,
               nameController: _nameController,
@@ -467,7 +467,7 @@ class _HostFormPageState extends State<HostFormPage> {
               onClearLogs: _clearAdbLogs,
             ),
             if (!_usesAdb) ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               HostAuthenticationSection(
                 authMethod: _authMethod,
                 passwordController: _passwordController,
@@ -504,7 +504,7 @@ class _HostFormPageState extends State<HostFormPage> {
                 onExternalAuthOfferKeyChanged: (value) =>
                     setState(() => _externalAuthOfferKey = value),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               HostAdvancedSection(
                 tags: _tags,
                 tagController: _tagController,
@@ -548,7 +548,7 @@ class _HostFormPageState extends State<HostFormPage> {
                     setState(() => _connectSnippetId = snippetId),
               ),
             ] else ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               _AdbKeySection(
                 loading: _adbKeyLoading,
                 fingerprint: _adbFingerprint,
